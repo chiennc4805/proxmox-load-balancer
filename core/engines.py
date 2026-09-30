@@ -1,4 +1,4 @@
-from interfaces import ProvisioningEngine
+from backend.app.interfaces import ProvisioningEngine
 
 class CloneProvisioningEngine(ProvisioningEngine):
 

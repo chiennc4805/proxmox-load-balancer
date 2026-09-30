@@ -1,4 +1,4 @@
-from core.factory import Factory
+from backend.app.factory import Factory
 from core.metadata_handler import MetadataHandler
 from core.proxmox_adapter import ProxmoxAdapter
 from core.context import RuntimeContext

@@ -1,4 +1,4 @@
-from interfaces import Algorithm
+from backend.app.interfaces import Algorithm
 
 class WeightedLinear(Algorithm):
     ...

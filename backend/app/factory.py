@@ -1,6 +1,6 @@
 import importlib
-from core.scheduler import Scheduler
-from core.interfaces import ProvisioningEngine
+from backend.app.scheduler.scheduler import Scheduler
+from backend.app.interfaces import ProvisioningEngine
 
 class Factory():
 

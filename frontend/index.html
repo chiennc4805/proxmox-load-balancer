@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Proxmox Load Balancer</title>
+  </head>
+  <body>
+    <h1>Proxmox Load Balancer</h1>
+    <p>Frontend đang chạy qua Nginx.</p>
+    <p>Trạng thái API: <span id="api-status">Đang kiểm tra...</span></p>
+    <script>
+      fetch('/api/health')
+        .then(response => {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(data => {
+          document.getElementById('api-status').textContent = data.status;
+        })
+        .catch(() => {
+          document.getElementById('api-status').textContent = 'Không kết nối được';
+        });
+    </script>
+  </body>
+</html>

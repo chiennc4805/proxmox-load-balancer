@@ -1,4 +1,4 @@
-from core.interfaces import Algorithm
+from backend.app.interfaces import Algorithm
 
 class Scheduler():
 
