@@ -4,23 +4,125 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Proxmox Load Balancer</title>
+    <style>
+      body { font: 16px system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #19232d; }
+      h1 { margin-bottom: .25rem; }
+      section { border: 1px solid #d5dce3; border-radius: 8px; padding: 1rem; margin: 1.5rem 0; }
+      label { display: block; margin: .75rem 0 .3rem; }
+      input, select, button { font: inherit; padding: .5rem; }
+      input, select { width: min(100%, 420px); box-sizing: border-box; }
+      input[type=checkbox] { width: auto; }
+      button { margin-top: .8rem; cursor: pointer; }
+      button:disabled { cursor: wait; }
+      table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+      th, td { border-bottom: 1px solid #d5dce3; padding: .5rem; text-align: left; }
+      .scroll { overflow-x: auto; }
+      .warning { background: #fff3cd; border-left: 4px solid #e4a900; padding: .8rem; }
+      .error { color: #a11919; }
+      .success { color: #166534; }
+    </style>
   </head>
   <body>
     <h1>Proxmox Load Balancer</h1>
-    <p>Frontend đang chạy qua Nginx.</p>
-    <p>Trạng thái API: <span id="api-status">Đang kiểm tra...</span></p>
+    <p>Kiểm tra adapter Proxmox: liệt kê QEMU VM và clone từ template.</p>
+
+    <section>
+      <h2>Danh sách VM</h2>
+      <button id="refresh" type="button">Tải lại</button>
+      <p id="list-status" role="status">Đang tải...</p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>VMID</th><th>Tên</th><th>Node</th><th>Trạng thái</th><th>Template</th><th>RAM tối đa</th></tr></thead>
+          <tbody id="vm-list"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Clone VM</h2>
+      <p class="warning">Lab hiện tại đặt IP tĩnh 172.20.11.100 trong Windows và không có DHCP. Bản clone sẽ giữ IP này nếu bạn chưa cấu hình lại trong guest. Chỉ nên bật một VM dùng IP đó tại một thời điểm.</p>
+      <form id="clone-form">
+        <label for="template-vmid">Template VMID</label>
+        <input id="template-vmid" name="template_vmid" type="number" min="100" required placeholder="Ví dụ: 9000">
+        <label for="new-vmid">VMID mới (để trống để Proxmox chọn)</label>
+        <input id="new-vmid" name="new_vmid" type="number" min="100" placeholder="Tự động">
+        <label for="vm-name">Tên VM mới (không bắt buộc)</label>
+        <input id="vm-name" name="name" type="text" maxlength="100" placeholder="Ví dụ: lab-test-01">
+        <label><input id="full-clone" name="full_clone" type="checkbox"> Full clone (sao chép toàn bộ ổ đĩa)</label>
+        <button id="clone-button" type="submit">Clone, khởi động và lấy IP</button>
+      </form>
+      <p id="clone-status" role="status"></p>
+    </section>
+
     <script>
-      fetch('/api/health')
-        .then(response => {
-          if (!response.ok) throw new Error('HTTP ' + response.status);
-          return response.json();
-        })
-        .then(data => {
-          document.getElementById('api-status').textContent = data.status;
-        })
-        .catch(() => {
-          document.getElementById('api-status').textContent = 'Không kết nối được';
-        });
+      const listStatus = document.getElementById('list-status');
+      const cloneStatus = document.getElementById('clone-status');
+
+      async function readResponse(response) {
+        const data = await response.json();
+        if (!response.ok) {
+          const detail = data.detail;
+          const message = typeof detail === 'object' && detail !== null ? detail.message : detail;
+          const vmid = detail && detail.vmid ? ` VMID đã cấp: ${detail.vmid}.` : '';
+          throw new Error((message || `HTTP ${response.status}`) + vmid);
+        }
+        return data;
+      }
+
+      async function loadVms() {
+        listStatus.textContent = 'Đang tải...';
+        listStatus.className = '';
+        document.getElementById('vm-list').replaceChildren();
+        try {
+          const vms = await readResponse(await fetch('/api/vms'));
+          for (const vm of vms) {
+            const row = document.createElement('tr');
+            for (const value of [vm.vmid, vm.name, vm.node, vm.status, vm.template ? 'Có' : 'Không', `${Math.round(vm.maxmem / 1024 / 1024)} MiB`]) {
+              const cell = document.createElement('td');
+              cell.textContent = String(value);
+              row.appendChild(cell);
+            }
+            document.getElementById('vm-list').appendChild(row);
+          }
+          listStatus.textContent = `${vms.length} VM`;
+        } catch (error) {
+          listStatus.textContent = error.message;
+          listStatus.className = 'error';
+        }
+      }
+
+      document.getElementById('refresh').addEventListener('click', loadVms);
+      document.getElementById('clone-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = document.getElementById('clone-button');
+        button.disabled = true;
+        cloneStatus.className = '';
+        cloneStatus.textContent = 'Đang clone và chờ Guest Agent trả IP. Quá trình này có thể mất vài phút...';
+        const rawVmid = document.getElementById('new-vmid').value;
+        const name = document.getElementById('vm-name').value.trim();
+        const body = {
+          template_vmid: Number(document.getElementById('template-vmid').value),
+          new_vmid: rawVmid ? Number(rawVmid) : null,
+          name: name || null,
+          full_clone: document.getElementById('full-clone').checked
+        };
+        try {
+          const result = await readResponse(await fetch('/api/vms/clone', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }));
+          cloneStatus.textContent = `VM ${result.vmid} trên ${result.node} đang chạy. Guest Agent báo IP: ${result.ip_address}`;
+          cloneStatus.className = 'success';
+          await loadVms();
+        } catch (error) {
+          cloneStatus.textContent = error.message;
+          cloneStatus.className = 'error';
+        } finally {
+          button.disabled = false;
+        }
+      });
+      loadVms();
     </script>
   </body>
 </html>

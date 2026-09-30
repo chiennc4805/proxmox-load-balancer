@@ -1,17 +1,188 @@
-from proxmoxer import ProxmoxAPI      
-from config import config
+"""Small Proxmox VE client for VM listing and clone/start/IP discovery."""
 
-class ProxmoxAdapter():
-    
-    def __init__(self, *, pve_api_host: str, pve_api_user: str, pve_token_name: str, pve_token_value: str, pve_verify_ssl: str, **kwargs):
-        self.proxmox = ProxmoxAPI(
-            pve_api_host,
-            user=pve_api_user,
-            token_name=pve_token_name,
-            token_value=pve_token_value,
-            verify_ssl=pve_verify_ssl,
-            **kwargs
+import ipaddress
+import os
+import time
+from dataclasses import dataclass
+
+from proxmoxer import ProxmoxAPI
+from proxmoxer.core import ResourceException
+
+
+class AdapterError(Exception):
+    def __init__(self, message: str, status_code: int = 502, vmid: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.vmid = vmid
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise AdapterError(f"{name} phải là số nguyên dương", 500) from exc
+    if value < 1:
+        raise AdapterError(f"{name} phải là số nguyên dương", 500)
+    return value
+
+
+@dataclass(frozen=True)
+class AdapterSettings:
+    host: str
+    user: str
+    token_name: str
+    token_value: str
+    verify_ssl: bool
+    network: ipaddress.IPv4Network
+    clone_timeout: int
+    agent_timeout: int
+
+    @classmethod
+    def from_env(cls) -> "AdapterSettings":
+        required = ("PVE_API_HOST", "PVE_API_USER", "PVE_TOKEN_NAME", "PVE_TOKEN_VALUE")
+        missing = [key for key in required if not os.getenv(key, "").strip()]
+        if missing:
+            raise AdapterError("Thiếu cấu hình: " + ", ".join(missing), 503)
+        host = os.environ["PVE_API_HOST"].strip()
+        if "://" in host or "/" in host:
+            raise AdapterError("PVE_API_HOST chỉ nhận IP/hostname, có thể kèm :8006", 500)
+        verify = os.getenv("PVE_VERIFY_SSL", "false").strip().lower()
+        if verify not in ("true", "false"):
+            raise AdapterError("PVE_VERIFY_SSL phải là true hoặc false", 500)
+        try:
+            network = ipaddress.ip_network(
+                os.getenv("LAB_NETWORK_CIDR", "172.20.11.0/24"), strict=False
+            )
+        except ValueError as exc:
+            raise AdapterError("LAB_NETWORK_CIDR không hợp lệ", 500) from exc
+        if not isinstance(network, ipaddress.IPv4Network):
+            raise AdapterError("LAB_NETWORK_CIDR phải là mạng IPv4", 500)
+        return cls(
+            host=host,
+            user=os.environ["PVE_API_USER"].strip(),
+            token_name=os.environ["PVE_TOKEN_NAME"].strip(),
+            token_value=os.environ["PVE_TOKEN_VALUE"].strip(),
+            verify_ssl=verify == "true",
+            network=network,
+            clone_timeout=_positive_int_env("VM_CLONE_TIMEOUT_SECONDS", 300),
+            agent_timeout=_positive_int_env("VM_AGENT_TIMEOUT_SECONDS", 180),
         )
 
-    def clone():
-        self.proxmox...
+
+class ProxmoxAdapter:
+    def __init__(self, settings: AdapterSettings, client=None):
+        self.settings = settings
+        self.proxmox = client or ProxmoxAPI(
+            settings.host,
+            user=settings.user,
+            token_name=settings.token_name,
+            token_value=settings.token_value,
+            verify_ssl=settings.verify_ssl,
+            timeout=15,
+        )
+
+    @classmethod
+    def from_env(cls) -> "ProxmoxAdapter":
+        return cls(AdapterSettings.from_env())
+
+    def list_vms(self) -> list[dict]:
+        try:
+            resources = self.proxmox.cluster.resources.get(type="vm")
+        except Exception as exc:
+            raise AdapterError("Không lấy được danh sách VM từ Proxmox") from exc
+        return sorted(
+            (
+                {
+                    "vmid": int(vm["vmid"]),
+                    "name": vm.get("name", ""),
+                    "node": vm.get("node", ""),
+                    "status": vm.get("status", "unknown"),
+                    "template": bool(int(vm.get("template", 0))),
+                    "maxmem": vm.get("maxmem", 0),
+                    "mem": vm.get("mem", 0),
+                    "maxcpu": vm.get("maxcpu", 0),
+                }
+                for vm in resources
+                if vm.get("type") == "qemu"
+            ),
+            key=lambda vm: vm["vmid"],
+        )
+
+    def _wait_task(self, node: str, upid: str, timeout: int, label: str, vmid: int):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                state = self.proxmox.nodes(node).tasks(upid).status.get()
+            except Exception as exc:
+                raise AdapterError(f"Không đọc được trạng thái {label} trên Proxmox", vmid=vmid) from exc
+            if state.get("status") == "stopped":
+                if state.get("exitstatus") != "OK":
+                    raise AdapterError(
+                        f"{label} thất bại: {state.get('exitstatus', 'không rõ lý do')}", vmid=vmid
+                    )
+                return
+            time.sleep(2)
+        raise AdapterError(f"Quá thời gian chờ {label}; kiểm tra VM {vmid} trên Proxmox", 504, vmid)
+
+    def _find_ip(self, node: str, vmid: int) -> str:
+        deadline = time.monotonic() + self.settings.agent_timeout
+        while time.monotonic() < deadline:
+            try:
+                data = self.proxmox.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+                interfaces = data.get("result", data) if isinstance(data, dict) else data
+                for interface in interfaces:
+                    for address in interface.get("ip-addresses", []):
+                        try:
+                            ip = ipaddress.ip_address(address.get("ip-address", ""))
+                        except ValueError:
+                            continue
+                        if ip in self.settings.network:
+                            return str(ip)
+            except ResourceException as exc:
+                if getattr(exc, "status_code", None) not in (500, 503, 595):
+                    raise AdapterError("Không truy vấn được QEMU Guest Agent", vmid=vmid) from exc
+            except (AttributeError, TypeError) as exc:
+                raise AdapterError("Dữ liệu IP từ QEMU Guest Agent không hợp lệ", vmid=vmid) from exc
+            time.sleep(3)
+        raise AdapterError(
+            f"VM {vmid} đã được tạo và khởi động nhưng Guest Agent chưa báo IP trong {self.settings.network}",
+            504,
+            vmid,
+        )
+
+    def clone_and_get_ip(
+        self, template_vmid: int, *, new_vmid: int | None = None,
+        name: str | None = None, full_clone: bool = False,
+    ) -> dict:
+        vms = self.list_vms()
+        source = next((vm for vm in vms if vm["vmid"] == template_vmid), None)
+        if source is None:
+            raise AdapterError(f"Không tìm thấy VM {template_vmid}", 404)
+        if not source["template"]:
+            raise AdapterError(f"VM {template_vmid} chưa được chuyển thành template", 400)
+        node = source["node"]
+        if not node:
+            raise AdapterError("Không xác định được node của template")
+        try:
+            vmid = new_vmid or int(self.proxmox.cluster.nextid.get())
+        except Exception as exc:
+            raise AdapterError("Không cấp được VMID mới từ Proxmox") from exc
+        if vmid == template_vmid or any(vm["vmid"] == vmid for vm in vms):
+            raise AdapterError(f"VMID {vmid} đã tồn tại", 409)
+
+        clone_args = {"newid": vmid, "full": int(full_clone)}
+        if name:
+            clone_args["name"] = name
+        try:
+            upid = self.proxmox.nodes(node).qemu(template_vmid).clone.post(**clone_args)
+        except Exception as exc:
+            raise AdapterError(f"Proxmox từ chối clone template {template_vmid}") from exc
+        self._wait_task(node, upid, self.settings.clone_timeout, "clone VM", vmid)
+
+        try:
+            start_upid = self.proxmox.nodes(node).qemu(vmid).status.start.post()
+        except Exception as exc:
+            raise AdapterError(f"VM {vmid} đã clone nhưng không khởi động được", vmid=vmid) from exc
+        self._wait_task(node, start_upid, self.settings.clone_timeout, "khởi động VM", vmid)
+        ip = self._find_ip(node, vmid)
+        return {"vmid": vmid, "node": node, "ip_address": ip}
