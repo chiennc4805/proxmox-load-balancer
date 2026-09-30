@@ -1,5 +1,6 @@
 import importlib
 from backend.app.scheduler.scheduler import Scheduler
+from backend.app.scheduler.store import get_store
 from backend.app.interfaces import ProvisioningEngine
 
 class Factory():
@@ -19,9 +20,7 @@ class Factory():
         return engine
 
     @staticmethod
-    def create_scheduler(algorithm: str) -> Scheduler:
-        algorithm_cls = Factory.import_class(f"algorithms.{algorithm}")
-        scheduler = Scheduler(algorithm_cls)
-        return scheduler
+    def create_scheduler() -> Scheduler:
+        return Scheduler(get_store())
         
 

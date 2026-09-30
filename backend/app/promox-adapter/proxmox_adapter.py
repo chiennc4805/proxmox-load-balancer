@@ -110,6 +110,19 @@ class ProxmoxAdapter:
             key=lambda vm: vm["vmid"],
         )
 
+    def list_nodes(self) -> list[str]:
+        """Return online Proxmox nodes available to the scheduler."""
+        try:
+            resources = self.proxmox.cluster.resources.get(type="node")
+        except Exception as exc:
+            raise AdapterError("Không lấy được danh sách node từ Proxmox") from exc
+        return sorted({
+            resource["node"] for resource in resources
+            if resource.get("type") == "node"
+            and resource.get("status") == "online"
+            and resource.get("node")
+        })
+
     def _wait_task(self, node: str, upid: str, timeout: int, label: str, vmid: int):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

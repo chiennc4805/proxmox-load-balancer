@@ -22,6 +22,15 @@ class ProxmoxAdapterTests(unittest.TestCase):
         self.assertEqual([vm["vmid"] for vm in self.adapter.list_vms()], [9000])
         self.client.cluster.resources.get.assert_called_once_with(type="vm")
 
+    def test_list_only_online_nodes(self):
+        self.client.cluster.resources.get.return_value = [
+            {"type": "node", "node": "pve2", "status": "offline"},
+            {"type": "node", "node": "pve1", "status": "online"},
+            {"type": "qemu", "node": "pve3", "status": "running"},
+        ]
+        self.assertEqual(self.adapter.list_nodes(), ["pve1"])
+        self.client.cluster.resources.get.assert_called_once_with(type="node")
+
     def test_clone_waits_for_tasks_and_selects_lab_ip(self):
         self.client.cluster.nextid.get.return_value = "10001"
         qemu = self.client.nodes.return_value.qemu

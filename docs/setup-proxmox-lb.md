@@ -138,6 +138,10 @@ Trong `.env`, đặt `PVE_API_HOST=10.10.0.11` (hoặc IP node PVE bạn truy c�
 Không thêm `https://` vào host. Giữ `LAB_NETWORK_CIDR=172.20.11.0/24` nếu
 clone chạy trên mạng `vmbr1` của `pve1`.
 
+Scheduler cần thêm `POSTGRES_PASSWORD`, `ADMIN_API_KEY` và `SCHEDULER_NODES=pve1`
+trong `.env` trước khi chạy `docker compose up`. PostgreSQL chạy nội bộ trong Compose;
+chi tiết cấu hình round robin và API admin xem [scheduler.md](scheduler.md).
+
 Để mở giao diện trên **máy phát triển** (terminal cần chạy liên tục):
 
 ```bash
@@ -152,7 +156,8 @@ phát triển đang được dùng, chọn `--local-host-port=localhost:18080` v
 
 Template Windows trong guide có IP tĩnh `172.20.11.100`; nhiều clone sẽ
 trùng IP cho đến khi bạn triển khai cơ chế cấp IP riêng. Test một clone trước.
-Các API hiện chưa có xác thực người gọi, nên giao diện chỉ mở qua IAP.
+API clone hiện chưa có xác thực người gọi; API cấu hình scheduler yêu cầu
+`X-Admin-Key`. Dùng IAP tunnel hoặc HTTPS khi nhập key trên giao diện.
 
 Tài liệu tham chiếu: [GCE instance create](https://docs.cloud.google.com/sdk/gcloud/reference/compute/instances/create),
 [IAP TCP forwarding](https://docs.cloud.google.com/iap/docs/using-tcp-forwarding),

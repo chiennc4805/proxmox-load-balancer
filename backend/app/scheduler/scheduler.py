@@ -1,12 +1,11 @@
-from backend.app.interfaces import Algorithm
+"""Choose an online, administratively enabled node for each clone."""
 
-class Scheduler():
+from backend.app.scheduler.store import SchedulerStore
 
-    def __init__(self, config: dict, algorithm_cls: Algorithm):
-        ...
 
-    def _filter(self):
-        ...
+class Scheduler:
+    def __init__(self, store: SchedulerStore):
+        self.store = store
 
-    def _score(self):
-        self.algorithm_cls
+    def select_node(self, adapter) -> dict[str, str]:
+        return self.store.reserve_node(adapter.list_nodes())

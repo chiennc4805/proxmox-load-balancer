@@ -1,10 +1,33 @@
 services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: proxmox_lb
+      POSTGRES_USER: proxmox_lb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - scheduler_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proxmox_lb -d proxmox_lb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
     env_file:
       - .env
+    environment:
+      DB_HOST: db
+      DB_NAME: proxmox_lb
+      DB_USER: proxmox_lb
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -15,3 +38,6 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  scheduler_db:

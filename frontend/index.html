@@ -24,7 +24,7 @@
   </head>
   <body>
     <h1>Proxmox Load Balancer</h1>
-    <p>Kiểm tra adapter Proxmox: liệt kê QEMU VM và clone từ template.</p>
+    <p>Liệt kê QEMU VM và clone từ template qua scheduler round robin.</p>
 
     <section>
       <h2>Danh sách VM</h2>
@@ -52,15 +52,64 @@
         <label for="target-node">Node đích (chỉ dùng khi thử adapter trực tiếp)</label>
         <input id="target-node" name="target_node" type="text" placeholder="Ví dụ: pve2">
         <p>Clone sang node khác cần template trên shared storage và bridge mạng phù hợp tại node đích.</p>
-        <button id="clone-button" type="submit">Clone trên node của template</button>
+        <button id="clone-button" type="submit">Clone bằng scheduler</button>
         <button id="clone-to-node-button" type="submit">Clone lên node đã chọn</button>
       </form>
       <p id="clone-status" role="status"></p>
     </section>
 
+    <section>
+      <h2>Cấu hình scheduler (admin)</h2>
+      <p>Chỉ khai báo node đã sẵn sàng nhận clone: có storage chứa template và bridge mạng phù hợp.</p>
+      <label for="admin-key">Admin API key</label>
+      <input id="admin-key" type="password" autocomplete="off" placeholder="ADMIN_API_KEY trong .env">
+      <label for="algorithm">Thuật toán</label>
+      <select id="algorithm"><option value="round_robin">Round robin</option></select>
+      <label for="eligible-nodes">Node được phép (cách nhau bằng dấu phẩy)</label>
+      <input id="eligible-nodes" type="text" value="pve1" placeholder="pve1,pve2,pve3">
+      <div>
+        <button id="load-config" type="button">Đọc cấu hình</button>
+        <button id="save-config" type="button">Lưu cấu hình</button>
+      </div>
+      <p id="scheduler-status" role="status"></p>
+    </section>
+
     <script>
       const listStatus = document.getElementById('list-status');
       const cloneStatus = document.getElementById('clone-status');
+      const schedulerStatus = document.getElementById('scheduler-status');
+
+      async function schedulerConfig(method) {
+        const key = document.getElementById('admin-key').value;
+        if (!key) {
+          schedulerStatus.textContent = 'Nhập Admin API key.';
+          schedulerStatus.className = 'error';
+          return;
+        }
+        const options = { method, headers: { 'X-Admin-Key': key } };
+        if (method === 'PUT') {
+          options.headers['Content-Type'] = 'application/json';
+          options.body = JSON.stringify({
+            algorithm: document.getElementById('algorithm').value,
+            eligible_nodes: document.getElementById('eligible-nodes').value.split(',').map(n => n.trim()).filter(Boolean)
+          });
+        }
+        schedulerStatus.textContent = 'Đang xử lý...';
+        schedulerStatus.className = '';
+        try {
+          const config = await readResponse(await fetch('/api/admin/scheduler', options));
+          document.getElementById('algorithm').value = config.algorithm;
+          document.getElementById('eligible-nodes').value = config.eligible_nodes.join(',');
+          schedulerStatus.textContent = `Thuật toán: ${config.algorithm}; node được phép: ${config.eligible_nodes.join(', ')}; lượt gần nhất: ${config.last_node || 'chưa có'}.`;
+          schedulerStatus.className = 'success';
+        } catch (error) {
+          schedulerStatus.textContent = error.message;
+          schedulerStatus.className = 'error';
+        }
+      }
+
+      document.getElementById('load-config').addEventListener('click', () => schedulerConfig('GET'));
+      document.getElementById('save-config').addEventListener('click', () => schedulerConfig('PUT'));
 
       async function readResponse(response) {
         const data = await response.json();
@@ -128,6 +177,7 @@
             body: JSON.stringify(body)
           }));
           cloneStatus.textContent = `VM ${result.vmid} trên ${result.node} đang chạy. Guest Agent báo IP: ${result.ip_address}`;
+          if (result.algorithm) cloneStatus.textContent += ` Scheduler: ${result.algorithm}, node được chọn: ${result.selected_node}.`;
           cloneStatus.className = 'success';
           await loadVms();
         } catch (error) {
