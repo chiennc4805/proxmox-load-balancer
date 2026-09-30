@@ -1,0 +1,13 @@
+from interfaces import Algorithm
+
+class WeightedLinear(Algorithm):
+    ...
+
+class BinPacking(Algorithm):
+    ...
+
+class VectorPacking(Algorithm):
+    ...
+
+class Topsis(Algorithm):
+    ...

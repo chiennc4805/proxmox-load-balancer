@@ -1,0 +1,25 @@
+{
+    "requestId": "req-001",
+    "provisioning": {
+        "mode": "clone",
+        "node_template_on": "...",
+        "template_id": "...",
+        "type": "full"
+    },
+    "vm": {
+        "name": "student-lab-01",
+        "cpu": 2,
+        "memoryMb": 4096,
+        "diskGb": 40,
+        "image": "ubuntu-22.04-template",
+        "network": "virtio"
+    },
+    "schedule": {
+        "algorithm": "...",
+        "allowedNodes": [
+            "pve-01",
+            "pve-02",
+            "pve-03"
+        ]
+    }
+}
