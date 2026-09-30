@@ -20,10 +20,35 @@ curl -X POST http://localhost:8080/api/vms/clone \
 ```
 
 API clone tự xin VMID qua `/cluster/nextid` nếu bỏ `new_vmid`, chờ task clone,
-khởi động VM, rồi chờ QEMU Guest Agent báo IPv4 thuộc `LAB_NETWORK_CIDR`.
+khởi động VM, rồi chờ QEMU Guest Agent báo IPv4. Adapter ưu tiên IP từ NIC
+chính của bản clone; `LAB_NETWORK_CIDR` giúp chọn IP khi có nhiều địa chỉ,
+nhưng IP DHCP ở dải khác vẫn được nhận. Linux template phải cài và chạy
+`qemu-guest-agent` trong guest.
 Kết quả thành công gồm `vmid`, `node`, `ip_address`. Nếu clone đã được tạo
 nhưng start hoặc lấy IP lỗi, thông báo lỗi vẫn chứa `vmid` để bạn kiểm tra
 VM đó trên Proxmox. API không tự xóa VM khi có lỗi.
+
+## Chọn node đích để thử adapter
+
+`POST /api/vms/clone` giữ request cũ và clone trên node chứa template.
+Endpoint thử riêng `POST /api/vms/clone-to-node` yêu cầu thêm `target_node`:
+
+```bash
+curl -X POST http://localhost:8080/api/vms/clone-to-node \
+  -H 'Content-Type: application/json' \
+  -d '{"template_vmid":9000,"target_node":"pve2","full_clone":true}'
+```
+
+Adapter gọi clone từ node nguồn với `target=pve2`, chờ task ở node nguồn,
+rồi cấu hình, khởi động VM và hỏi Guest Agent trên node đích. Sau này
+scheduler có thể truyền node đã chọn vào `target_node`.
+
+Trong lab của `setup-promox.md`, `local` trên mỗi PVE node là disk riêng,
+không phải shared storage. Proxmox chỉ cho clone trực tiếp sang node khác
+nếu template gốc ở shared storage. Hơn nữa guide chỉ tạo `vmbr1` trên `pve1`;
+node đích cần bridge/mạng phù hợp để VM khởi động và nhận IP. Bạn có thể thử
+API với `target_node=pve1` trước; chọn `pve2`/`pve3` chỉ sau khi chuẩn bị
+shared storage và mạng ở các node đó.
 
 **Giới hạn của lab hiện tại:** `setup-vm-and-guacamole.md` cấu hình Windows
 template với IP tĩnh `172.20.11.100`; `vmbr1` không có DHCP. Clone Windows

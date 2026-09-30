@@ -49,7 +49,11 @@
         <label for="vm-name">Tên VM mới (không bắt buộc)</label>
         <input id="vm-name" name="name" type="text" maxlength="100" placeholder="Ví dụ: lab-test-01">
         <label><input id="full-clone" name="full_clone" type="checkbox"> Full clone (sao chép toàn bộ ổ đĩa)</label>
-        <button id="clone-button" type="submit">Clone, khởi động và lấy IP</button>
+        <label for="target-node">Node đích (chỉ dùng khi thử adapter trực tiếp)</label>
+        <input id="target-node" name="target_node" type="text" placeholder="Ví dụ: pve2">
+        <p>Clone sang node khác cần template trên shared storage và bridge mạng phù hợp tại node đích.</p>
+        <button id="clone-button" type="submit">Clone trên node của template</button>
+        <button id="clone-to-node-button" type="submit">Clone lên node đã chọn</button>
       </form>
       <p id="clone-status" role="status"></p>
     </section>
@@ -95,7 +99,16 @@
       document.getElementById('clone-form').addEventListener('submit', async event => {
         event.preventDefault();
         const button = document.getElementById('clone-button');
+        const nodeButton = document.getElementById('clone-to-node-button');
+        const useTargetNode = event.submitter === nodeButton;
+        const targetNode = document.getElementById('target-node').value.trim();
+        if (useTargetNode && !targetNode) {
+          cloneStatus.textContent = 'Nhập node đích trước khi thử adapter.';
+          cloneStatus.className = 'error';
+          return;
+        }
         button.disabled = true;
+        nodeButton.disabled = true;
         cloneStatus.className = '';
         cloneStatus.textContent = 'Đang clone và chờ Guest Agent trả IP. Quá trình này có thể mất vài phút...';
         const rawVmid = document.getElementById('new-vmid').value;
@@ -106,8 +119,10 @@
           name: name || null,
           full_clone: document.getElementById('full-clone').checked
         };
+        if (useTargetNode) body.target_node = targetNode;
         try {
-          const result = await readResponse(await fetch('/api/vms/clone', {
+          const endpoint = useTargetNode ? '/api/vms/clone-to-node' : '/api/vms/clone';
+          const result = await readResponse(await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -120,6 +135,7 @@
           cloneStatus.className = 'error';
         } finally {
           button.disabled = false;
+          nodeButton.disabled = false;
         }
       });
       loadVms();

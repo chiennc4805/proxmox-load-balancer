@@ -2,6 +2,8 @@
 
 import ipaddress
 import os
+import re
+import secrets
 import time
 from dataclasses import dataclass
 
@@ -124,20 +126,74 @@ class ProxmoxAdapter:
             time.sleep(2)
         raise AdapterError(f"Quá thời gian chờ {label}; kiểm tra VM {vmid} trên Proxmox", 504, vmid)
 
-    def _find_ip(self, node: str, vmid: int) -> str:
+    @staticmethod
+    def _nic_mac(net_config: str) -> str | None:
+        first = net_config.split(",", 1)[0]
+        if "=" not in first:
+            return None
+        mac = first.split("=", 1)[1]
+        return mac.lower() if re.fullmatch(r"[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}", mac) else None
+
+    @staticmethod
+    def _new_mac() -> str:
+        return ":".join(f"{byte:02X}" for byte in bytes([0x02]) + secrets.token_bytes(5))
+
+    def _prepare_clone_network(self, source_node: str, target_node: str, template_vmid: int, vmid: int) -> str | None:
+        """Keep the clone's DHCP identity distinct and enable its guest agent."""
+        try:
+            source = self.proxmox.nodes(source_node).qemu(template_vmid).config.get()
+            clone = self.proxmox.nodes(target_node).qemu(vmid).config.get()
+            source_mac = self._nic_mac(source.get("net0", ""))
+            clone_net0 = clone.get("net0", "")
+            clone_mac = self._nic_mac(clone_net0)
+            changes = {}
+
+            # Proxmox normally generates a new MAC. Repair only if the clone kept it.
+            if source_mac and clone_mac == source_mac:
+                model_and_mac, *options = clone_net0.split(",", 1)
+                model = model_and_mac.split("=", 1)[0]
+                changes["net0"] = f"{model}={self._new_mac()}"
+                if options:
+                    changes["net0"] += f",{options[0]}"
+                clone_mac = self._nic_mac(changes["net0"])
+
+            agent_option = str(clone.get("agent", ""))
+            if agent_option != "1" and not re.search(r"(?:^|,)enabled=1(?:,|$)", agent_option):
+                changes["agent"] = "enabled=1"
+            if changes:
+                self.proxmox.nodes(target_node).qemu(vmid).config.post(**changes)
+            return clone_mac
+        except Exception as exc:
+            raise AdapterError(f"VM {vmid} đã clone nhưng không cấu hình được NIC/Guest Agent", vmid=vmid) from exc
+
+    def _find_ip(self, node: str, vmid: int, preferred_mac: str | None = None) -> str:
         deadline = time.monotonic() + self.settings.agent_timeout
         while time.monotonic() < deadline:
             try:
                 data = self.proxmox.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
                 interfaces = data.get("result", data) if isinstance(data, dict) else data
+                candidates = []
                 for interface in interfaces:
+                    if interface.get("name") == "lo":
+                        continue
+                    mac_matches = (
+                        preferred_mac is not None
+                        and str(interface.get("hardware-address", "")).lower() == preferred_mac
+                    )
                     for address in interface.get("ip-addresses", []):
                         try:
                             ip = ipaddress.ip_address(address.get("ip-address", ""))
                         except ValueError:
                             continue
-                        if ip in self.settings.network:
-                            return str(ip)
+                        if not isinstance(ip, ipaddress.IPv4Address):
+                            continue
+                        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                            continue
+                        candidates.append((ip, mac_matches))
+                if candidates:
+                    # Prefer the VM's primary NIC; DHCP may use a subnet other than LAB_NETWORK_CIDR.
+                    best = min(candidates, key=lambda item: (not item[1], item[0] not in self.settings.network))
+                    return str(best[0])
             except ResourceException as exc:
                 if getattr(exc, "status_code", None) not in (500, 503, 595):
                     raise AdapterError("Không truy vấn được QEMU Guest Agent", vmid=vmid) from exc
@@ -145,7 +201,7 @@ class ProxmoxAdapter:
                 raise AdapterError("Dữ liệu IP từ QEMU Guest Agent không hợp lệ", vmid=vmid) from exc
             time.sleep(3)
         raise AdapterError(
-            f"VM {vmid} đã được tạo và khởi động nhưng Guest Agent chưa báo IP trong {self.settings.network}",
+            f"VM {vmid} đã chạy nhưng Guest Agent chưa báo IPv4 hợp lệ; kiểm tra QEMU Guest Agent và DHCP trong VM",
             504,
             vmid,
         )
@@ -153,6 +209,7 @@ class ProxmoxAdapter:
     def clone_and_get_ip(
         self, template_vmid: int, *, new_vmid: int | None = None,
         name: str | None = None, full_clone: bool = False,
+        target_node: str | None = None,
     ) -> dict:
         vms = self.list_vms()
         source = next((vm for vm in vms if vm["vmid"] == template_vmid), None)
@@ -160,9 +217,12 @@ class ProxmoxAdapter:
             raise AdapterError(f"Không tìm thấy VM {template_vmid}", 404)
         if not source["template"]:
             raise AdapterError(f"VM {template_vmid} chưa được chuyển thành template", 400)
-        node = source["node"]
-        if not node:
+        source_node = source["node"]
+        if not source_node:
             raise AdapterError("Không xác định được node của template")
+        target_node = target_node.strip() if target_node else source_node
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", target_node):
+            raise AdapterError("Tên node đích không hợp lệ", 400)
         try:
             vmid = new_vmid or int(self.proxmox.cluster.nextid.get())
         except Exception as exc:
@@ -173,16 +233,25 @@ class ProxmoxAdapter:
         clone_args = {"newid": vmid, "full": int(full_clone)}
         if name:
             clone_args["name"] = name
+        if target_node != source_node:
+            clone_args["target"] = target_node
         try:
-            upid = self.proxmox.nodes(node).qemu(template_vmid).clone.post(**clone_args)
+            upid = self.proxmox.nodes(source_node).qemu(template_vmid).clone.post(**clone_args)
+        except ResourceException as exc:
+            reason = str(exc.content or exc.status_message)[:300]
+            raise AdapterError(
+                f"Proxmox từ chối clone template {template_vmid} sang {target_node}: {reason}"
+            ) from exc
         except Exception as exc:
-            raise AdapterError(f"Proxmox từ chối clone template {template_vmid}") from exc
-        self._wait_task(node, upid, self.settings.clone_timeout, "clone VM", vmid)
+            raise AdapterError(f"Proxmox từ chối clone template {template_vmid} sang {target_node}") from exc
+        self._wait_task(source_node, upid, self.settings.clone_timeout, "clone VM", vmid)
+
+        clone_mac = self._prepare_clone_network(source_node, target_node, template_vmid, vmid)
 
         try:
-            start_upid = self.proxmox.nodes(node).qemu(vmid).status.start.post()
+            start_upid = self.proxmox.nodes(target_node).qemu(vmid).status.start.post()
         except Exception as exc:
             raise AdapterError(f"VM {vmid} đã clone nhưng không khởi động được", vmid=vmid) from exc
-        self._wait_task(node, start_upid, self.settings.clone_timeout, "khởi động VM", vmid)
-        ip = self._find_ip(node, vmid)
-        return {"vmid": vmid, "node": node, "ip_address": ip}
+        self._wait_task(target_node, start_upid, self.settings.clone_timeout, "khởi động VM", vmid)
+        ip = self._find_ip(target_node, vmid, clone_mac)
+        return {"vmid": vmid, "node": target_node, "ip_address": ip}

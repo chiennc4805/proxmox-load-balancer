@@ -14,6 +14,10 @@ class CloneRequest(BaseModel):
     full_clone: bool = False
 
 
+class CloneToNodeRequest(CloneRequest):
+    target_node: str = Field(min_length=1, max_length=63, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+
+
 def _api_error(exc: AdapterError) -> HTTPException:
     return HTTPException(
         status_code=exc.status_code,
@@ -42,6 +46,21 @@ def clone_vm(request: CloneRequest) -> dict:
             new_vmid=request.new_vmid,
             name=request.name,
             full_clone=request.full_clone,
+        )
+    except AdapterError as exc:
+        raise _api_error(exc) from exc
+
+
+@app.post("/api/vms/clone-to-node")
+def clone_vm_to_node(request: CloneToNodeRequest) -> dict:
+    """Direct adapter test; the scheduler will supply target_node later."""
+    try:
+        return ProxmoxAdapter.from_env().clone_and_get_ip(
+            request.template_vmid,
+            new_vmid=request.new_vmid,
+            name=request.name,
+            full_clone=request.full_clone,
+            target_node=request.target_node,
         )
     except AdapterError as exc:
         raise _api_error(exc) from exc
