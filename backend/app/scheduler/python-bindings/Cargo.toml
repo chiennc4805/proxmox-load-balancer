@@ -1,0 +1,15 @@
+[package]
+name = "proxmox-topsis-python"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "_rust_topsis"
+crate-type = ["cdylib"]
+test = false
+
+[dependencies]
+proxmox-resource-scheduling = { path = "../proxmox-resource-scheduling" }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }
+

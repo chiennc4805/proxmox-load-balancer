@@ -24,7 +24,7 @@
   </head>
   <body>
     <h1>Proxmox Load Balancer</h1>
-    <p>Liệt kê QEMU VM và clone từ template qua scheduler round robin.</p>
+    <p>Liệt kê QEMU VM và clone từ template qua scheduler round robin hoặc TOPSIS.</p>
 
     <section>
       <h2>Danh sách VM</h2>
@@ -79,12 +79,22 @@
       <label for="admin-key">Admin API key</label>
       <input id="admin-key" type="password" autocomplete="off" placeholder="ADMIN_API_KEY trong .env">
       <label for="algorithm">Thuật toán</label>
-      <select id="algorithm"><option value="round_robin">Round robin</option></select>
+      <select id="algorithm">
+        <option value="round_robin">Round robin</option>
+        <option value="topsis">TOPSIS</option>
+      </select>
       <div>
         <button id="load-config" type="button">Đọc cấu hình</button>
         <button id="save-config" type="button">Lưu cấu hình</button>
+        <button id="preview-topsis" type="button">Tính điểm TOPSIS</button>
       </div>
       <p id="scheduler-status" role="status"></p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Hạng</th><th>Node</th><th>CPU đang dùng</th><th>RAM đang dùng</th><th>Điểm</th></tr></thead>
+          <tbody id="score-list"></tbody>
+        </table>
+      </div>
     </section>
 
     <script>
@@ -121,6 +131,52 @@
 
       document.getElementById('load-config').addEventListener('click', () => schedulerConfig('GET'));
       document.getElementById('save-config').addEventListener('click', () => schedulerConfig('PUT'));
+
+      document.getElementById('preview-topsis').addEventListener('click', async () => {
+        const button = document.getElementById('preview-topsis');
+        const key = document.getElementById('admin-key').value;
+        const templateVmid = Number(document.getElementById('template-vmid').value);
+        const body = document.getElementById('score-list');
+        if (!key || !templateVmid) {
+          schedulerStatus.textContent = 'Nhập Admin API key và Template VMID.';
+          schedulerStatus.className = 'error';
+          return;
+        }
+        button.disabled = true;
+        body.replaceChildren();
+        schedulerStatus.textContent = 'Đang tính điểm TOPSIS...';
+        schedulerStatus.className = '';
+        try {
+          const result = await readResponse(await fetch('/api/admin/scheduler/preview', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-Admin-Key': key},
+            body: JSON.stringify({template_vmid: templateVmid})
+          }));
+          for (const node of result.nodes) {
+            const row = document.createElement('tr');
+            const values = [
+              node.rank,
+              node.node,
+              `${node.cpu.toFixed(2)} / ${node.maxcpu} core`,
+              `${Math.round(node.mem / 1024 / 1024)} / ${Math.round(node.maxmem / 1024 / 1024)} MiB`,
+              node.score.toFixed(6)
+            ];
+            for (const value of values) {
+              const cell = document.createElement('td');
+              cell.textContent = String(value);
+              row.appendChild(cell);
+            }
+            body.appendChild(row);
+          }
+          schedulerStatus.textContent = `Node được đề xuất: ${result.selected_node}. Nút này chỉ tính điểm, không clone VM.`;
+          schedulerStatus.className = 'success';
+        } catch (error) {
+          schedulerStatus.textContent = error.message;
+          schedulerStatus.className = 'error';
+        } finally {
+          button.disabled = false;
+        }
+      });
 
       async function readResponse(response) {
         const data = await response.json();

@@ -13,3 +13,4 @@ class PlacementContext:
 class PlacementDecision:
     node: str
     algorithm: str
+    score: float | None = None

@@ -1,0 +1,15 @@
+[workspace]
+members = ["proxmox-resource-scheduling", "python-bindings"]
+resolver = "2"
+
+[workspace.package]
+authors = ["Proxmox Server Solutions GmbH <support@proxmox.com>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://git.proxmox.com/git/proxmox-resource-scheduling.git"
+exclude = ["debian"]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = "1"
+

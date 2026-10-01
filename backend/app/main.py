@@ -6,7 +6,12 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from backend.app.controllers.job_controller import JobController
 from backend.app.controllers.vm_controller import VmController
 from backend.app.jobs.store import JobStoreError, get_job_store
-from backend.app.models.vm import CloneRequest, CloneToNodeRequest, SchedulerConfigRequest
+from backend.app.models.vm import (
+    CloneRequest,
+    CloneToNodeRequest,
+    SchedulerConfigRequest,
+    SchedulerPreviewRequest,
+)
 from backend.app.proxmox_adapter import AdapterError, ProxmoxAdapter
 from backend.app.scheduler.scheduler import SchedulerError
 
@@ -126,3 +131,16 @@ def set_scheduler_config(
     except (JobStoreError, SchedulerError) as exc:
         status_code = getattr(exc, "status_code", 503)
         raise HTTPException(status_code=status_code, detail={"message": str(exc)}) from exc
+
+
+@app.post("/api/admin/scheduler/preview")
+def preview_scheduler(
+    request: SchedulerPreviewRequest, x_admin_key: str | None = Header(default=None)
+) -> dict:
+    _require_admin_key(x_admin_key)
+    try:
+        return vm_controller.preview_topsis(request.template_vmid)
+    except AdapterError as exc:
+        raise _api_error(exc) from exc
+    except SchedulerError as exc:
+        raise _scheduler_error(exc) from exc

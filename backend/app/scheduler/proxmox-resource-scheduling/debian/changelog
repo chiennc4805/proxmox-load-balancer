@@ -1,0 +1,63 @@
+rust-proxmox-resource-scheduling (2.1.0-1) trixie; urgency=medium
+
+  * scheduler: clamp the load imbalance metric to the unit interval, by
+    normalizing the previously raw coefficient of variation against its
+    theoretical upper bound for the given number of nodes. This yields a value
+    between 0 and 1 that can be interpreted on its own, rather than only being
+    meaningful in direct comparison to other values.
+
+ -- Proxmox Support Team <support@proxmox.com>  Fri, 15 May 2026 00:26:52 +0200
+
+rust-proxmox-resource-scheduling (2.0.0-1) trixie; urgency=medium
+
+  * rename service to resource where appropriate, including public interfaces.
+
+  * introduce generic scheduler and cluster usage implementation.
+
+  * topsis: handle empty criteria without panics.
+
+  * implement rebalancing migration selection. Assuming that a resource will
+    hold the same dynamic resource usage on a new node as on the previous
+    node, score possible migrations, where the cluster node imbalance is
+    minimal (bruteforce), or the shifted root mean square and maximum resource
+    usages of the cpu and memory is minimal across the cluster nodes (TOPSIS).
+
+ -- Proxmox Support Team <support@proxmox.com>  Tue, 31 Mar 2026 18:06:13 +0200
+
+rust-proxmox-resource-scheduling (1.0.1-1) trixie; urgency=medium
+
+  * allow owned nodes slice for score_nodes_to_start_service.
+
+ -- Proxmox Support Team <support@proxmox.com>  Fri, 14 Nov 2025 13:08:14 +0100
+
+rust-proxmox-resource-scheduling (1.0.0-1) trixie; urgency=medium
+
+  * re-build for Debian Trixie based releases.
+
+ -- Proxmox Support Team <support@proxmox.com>  Sat, 31 May 2025 15:45:25 +0200
+
+rust-proxmox-resource-scheduling (0.3.0-1) bookworm; urgency=medium
+
+  * re-build for Debian 12 Bookworm based Proxmox VE 8.x release series
+
+ -- Proxmox Support Team <support@proxmox.com>  Mon, 08 May 2023 14:50:18 +0200
+
+rust-proxmox-resource-scheduling (0.2.1-1) stable; urgency=medium
+
+  * pve static-resource scheduler: add one to scoring to avoid boosting
+    tiny relative differences
+
+ -- Proxmox Support Team <support@proxmox.com>  Tue, 21 Mar 2023 17:54:29 +0100
+
+rust-proxmox-resource-scheduling (0.2.0-1) stable; urgency=medium
+
+  * pve ha: fix scoring issue when a node is overcommitted compared to others,
+    that have the same stats by using a nonlinear averaging method.
+
+ -- Proxmox Support Team <support@proxmox.com>  Tue, 21 Mar 2023 14:54:09 +0100
+
+rust-proxmox-resource-scheduling (0.1.0-1) stable; urgency=medium
+
+  * Initial release.
+
+ --  Proxmox Support Team <support@proxmox.com>  Mon, 24 Oct 2022 11:32:11 +0200

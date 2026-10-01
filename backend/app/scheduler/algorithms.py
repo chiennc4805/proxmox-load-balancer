@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 
 from backend.app.interfaces import Algorithm
+from backend.app.scheduler.rust_topsis import rank_nodes
 
 
 class RoundRobin(Algorithm):
@@ -26,4 +27,12 @@ class RoundRobin(Algorithm):
         raise ValueError("Không còn node nào để thử")
 
 
-ALGORITHMS = {RoundRobin.name: RoundRobin}
+class Topsis:
+    name = "topsis"
+
+    @staticmethod
+    def rank(nodes: Sequence[dict], resource: dict) -> list[dict]:
+        return rank_nodes(nodes, resource)
+
+
+ALGORITHMS = {RoundRobin.name: RoundRobin, Topsis.name: Topsis}

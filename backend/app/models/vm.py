@@ -14,3 +14,7 @@ class CloneToNodeRequest(CloneRequest):
 
 class SchedulerConfigRequest(BaseModel):
     algorithm: str = Field(min_length=1)
+
+
+class SchedulerPreviewRequest(BaseModel):
+    template_vmid: int = Field(ge=100)

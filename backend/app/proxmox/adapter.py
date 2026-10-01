@@ -138,6 +138,49 @@ class ProxmoxAdapter:
             and resource.get("node")
         })
 
+    def get_placement_data(self, template_vmid: int) -> dict:
+        """Return normalized online node metrics and template requirements for TOPSIS."""
+        nodes = []
+        for resource in self.list_node_resources():
+            if resource.get("status") != "online" or not resource.get("node"):
+                continue
+            try:
+                maxcpu = int(resource.get("maxcpu", 0))
+                maxmem = int(resource.get("maxmem", 0))
+                cpu_ratio = float(resource.get("cpu", 0.0))
+                mem = int(resource.get("mem", 0))
+            except (TypeError, ValueError) as exc:
+                raise AdapterError(
+                    f"Resource metrics của node {resource.get('node')} không hợp lệ"
+                ) from exc
+            if maxcpu < 1 or maxmem < 1 or cpu_ratio < 0 or mem < 0:
+                raise AdapterError(
+                    f"Resource metrics của node {resource['node']} không hợp lệ"
+                )
+            nodes.append({
+                "name": resource["node"],
+                # Proxmox reports CPU as a ratio; Rust expects used CPU cores.
+                "cpu": cpu_ratio * maxcpu,
+                "maxcpu": maxcpu,
+                "mem": mem,
+                "maxmem": maxmem,
+            })
+
+        template = next((vm for vm in self.list_vms() if vm["vmid"] == template_vmid), None)
+        if template is None:
+            raise AdapterError(f"Không tìm thấy VM {template_vmid}", 404)
+        if not template["template"]:
+            raise AdapterError(f"VM {template_vmid} chưa được chuyển thành template", 400)
+        workload = {
+            "maxcpu": float(template.get("maxcpu", 0)),
+            "maxmem": int(template.get("maxmem", 0)),
+        }
+        if workload["maxcpu"] < 0 or workload["maxmem"] < 1:
+            raise AdapterError(
+                f"Template {template_vmid} có resource requirements không hợp lệ", 400
+            )
+        return {"nodes": nodes, "resource": workload}
+
     def _wait_task(
         self, node: str, upid: str, timeout: int, label: str, vmid: int,
         retryable_on_failure: bool = False,

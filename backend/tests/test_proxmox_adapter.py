@@ -36,6 +36,30 @@ class ProxmoxAdapterTests(unittest.TestCase):
         self.assertEqual(self.adapter.list_resources("storage")[0]["storage"], "nas-nfs")
         self.client.cluster.resources.get.assert_called_once_with(type="storage")
 
+    def test_placement_data_normalizes_cpu_and_template_requirements(self):
+        self.client.cluster.resources.get.side_effect = [
+            [
+                {
+                    "type": "node", "node": "pve1", "status": "online",
+                    "cpu": 0.25, "maxcpu": 16, "mem": 4 << 30, "maxmem": 32 << 30,
+                },
+                {"type": "node", "node": "pve2", "status": "offline"},
+            ],
+            [
+                {
+                    "type": "qemu", "vmid": 9000, "name": "template",
+                    "node": "pve1", "status": "stopped", "template": 1,
+                    "maxcpu": 4, "maxmem": 8 << 30,
+                }
+            ],
+        ]
+
+        data = self.adapter.get_placement_data(9000)
+
+        self.assertEqual(data["nodes"][0]["cpu"], 4.0)
+        self.assertEqual(data["nodes"][0]["maxcpu"], 16)
+        self.assertEqual(data["resource"], {"maxcpu": 4.0, "maxmem": 8 << 30})
+
     def test_clone_waits_for_tasks_and_selects_lab_ip(self):
         self.client.cluster.nextid.get.return_value = "10001"
         qemu = self.client.nodes.return_value.qemu

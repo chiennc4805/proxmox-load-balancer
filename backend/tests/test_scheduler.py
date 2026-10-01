@@ -59,7 +59,46 @@ class RoundRobinTests(unittest.TestCase):
         self.assertEqual(decision.algorithm, "round_robin")
 
 
+class TopsisTests(unittest.TestCase):
+    @patch("backend.app.scheduler.algorithms.rank_nodes")
+    def test_selects_node_with_highest_rust_score(self, rust_rank):
+        rust_rank.return_value = [
+            {"node": "pve2", "score": 0.9},
+            {"node": "pve1", "score": 0.2},
+        ]
+        stats = [
+            {"name": "pve1", "cpu": 4.0, "maxcpu": 8, "mem": 4, "maxmem": 16},
+            {"name": "pve2", "cpu": 1.0, "maxcpu": 8, "mem": 2, "maxmem": 16},
+        ]
+
+        decision = Scheduler("topsis").select_node(
+            ["pve1", "pve2"], node_stats=stats,
+            resource_stats={"maxcpu": 2.0, "maxmem": 4},
+        )
+
+        self.assertEqual(decision.node, "pve2")
+        self.assertEqual(decision.score, 0.9)
+
+
 class VmControllerTests(unittest.TestCase):
+    @patch("backend.app.scheduler.algorithms.rank_nodes")
+    def test_topsis_preview_does_not_clone(self, rust_rank):
+        rust_rank.return_value = [{"node": "pve2", "score": 0.75}]
+        adapter = MagicMock()
+        adapter.get_placement_data.return_value = {
+            "nodes": [
+                {"name": "pve2", "cpu": 1.0, "maxcpu": 8, "mem": 2, "maxmem": 16}
+            ],
+            "resource": {"maxcpu": 2.0, "maxmem": 4},
+        }
+        controller = VmController(FakeJobStore("topsis"), adapter_factory=lambda: adapter)
+
+        result = controller.preview_topsis(9000)
+
+        self.assertEqual(result["selected_node"], "pve2")
+        self.assertEqual(result["nodes"][0]["score"], 0.75)
+        adapter.clone_and_get_ip.assert_not_called()
+
     def test_retries_next_node_after_clone_failure_without_vm(self):
         adapter = MagicMock()
         adapter.list_nodes.return_value = ["pve1", "pve2", "pve3"]
@@ -178,6 +217,21 @@ class ApiWiringTests(unittest.TestCase):
 
         self.assertEqual(result["job_id"], "job-1")
         controller.clone_vm.assert_called_once()
+
+    def test_preview_route_calls_controller_without_cloning(self):
+        from backend.app.main import preview_scheduler
+        from backend.app.models.vm import SchedulerPreviewRequest
+
+        with patch.dict("os.environ", {"ADMIN_API_KEY": "secret"}):
+            with patch("backend.app.main.vm_controller") as controller:
+                controller.preview_topsis.return_value = {
+                    "algorithm": "topsis", "selected_node": "pve2", "nodes": []
+                }
+                result = preview_scheduler(SchedulerPreviewRequest(template_vmid=9000), "secret")
+
+        self.assertEqual(result["selected_node"], "pve2")
+        controller.preview_topsis.assert_called_once_with(9000)
+        controller.clone_vm.assert_not_called()
 
 
 if __name__ == "__main__":
