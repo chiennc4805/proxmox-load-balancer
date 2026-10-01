@@ -34,7 +34,7 @@ Bài Lab xuất hiện trên dashboard của sinh viên
 ```
 Sinh viên bấm "Start Lab" trên browser
     ↓
-MalSec Backend gọi Proxmox API:
+MalSec Backend gọi Proxmox Load Balancer:
     "Clone VM 9000 thành VM mới (VMID 10001) cho sinh viên này"
     ↓
 Proxmox tạo Linked Clone (chỉ lưu phần khác biệt, nhanh + nhẹ)
@@ -753,10 +753,13 @@ PVE_API_HOST=10.10.0.11
 PVE_API_USER=malsec-api@pve
 PVE_TOKEN_NAME=malsec-token
 PVE_TOKEN_VALUE=THAY_BANG_TOKEN_VALUE_TU_BUOC_1_1
-# Node Proxmox chứa VM template
-PVE_NODE=pve1
 # Tắt verify SSL vì Proxmox dùng self-signed cert
 PVE_VERIFY_SSL=false
+
+# API nội bộ của Proxmox Load Balancer dùng riêng cho thao tác tạo VM
+PROXMOX_LB_BASE_URL=http://PROXMOX_LB_PRIVATE_IP:8080
+PROXMOX_LB_SERVICE_KEY=THAY_BANG_CUNG_KEY_TREN_LOAD_BALANCER
+PROXMOX_LB_REQUEST_TIMEOUT_SECONDS=1800
 
 # Dải VMID cho Template VM (giảng viên chọn template từ dải này)
 TEMPLATE_VMID_MIN=9000
@@ -1080,9 +1083,9 @@ Cross-subnet: 10.10.0.0/24 ↔ 10.20.0.0/24
 1. Sinh viên mở http://MALSEC_SERVER_PUBLIC_IP/ → trang login MalSec
 2. Đăng nhập → thấy danh sách bài Lab
 3. Click "Start Lab" →
-4. MalSec Backend (10.20.0.10) → Proxmox API (10.10.0.11:8006): "Clone VM 9000 → VM 10xxx"
-5. Proxmox clone xong → MalSec start VM → hỏi Guest Agent IP
-6. Guest Agent trả IP 172.20.11.xxx
+4. MalSec Backend → Proxmox Load Balancer: "Clone VM 9000 → VM 10xxx"
+5. Load Balancer chọn node, clone, start VM và hỏi Guest Agent
+6. Load Balancer trả job ID, node, VMID và IP 172.20.11.xxx cho MalSec
 7. MalSec sinh encrypted JSON token (AES + HMAC, secret key)
 8. Browser nhận URL: /guacamole/#/client/c/Lab-VM-student?data=ENCRYPTED
 9. Nginx (10.20.0.10) proxy /guacamole/ → Guacamole (10.10.0.50:8080)

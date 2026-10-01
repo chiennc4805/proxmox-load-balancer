@@ -55,6 +55,8 @@
       <h2>Clone VM</h2>
       <p class="warning">Lab hiện tại đặt IP tĩnh 172.20.11.100 trong Windows và không có DHCP. Bản clone sẽ giữ IP này nếu bạn chưa cấu hình lại trong guest. Chỉ nên bật một VM dùng IP đó tại một thời điểm.</p>
       <form id="clone-form">
+        <label for="service-key">Service API key</label>
+        <input id="service-key" type="password" autocomplete="off" placeholder="PROXMOX_LB_SERVICE_KEY trong .env" required>
         <label for="template-vmid">Template VMID</label>
         <input id="template-vmid" name="template_vmid" type="number" min="100" required placeholder="Ví dụ: 9000">
         <label for="new-vmid">VMID mới (để trống để Proxmox chọn)</label>
@@ -185,6 +187,12 @@
         const nodeButton = document.getElementById('clone-to-node-button');
         const useTargetNode = event.submitter === nodeButton;
         const targetNode = document.getElementById('target-node').value.trim();
+        const serviceKey = document.getElementById('service-key').value;
+        if (!serviceKey) {
+          cloneStatus.textContent = 'Nhập Service API key.';
+          cloneStatus.className = 'error';
+          return;
+        }
         if (useTargetNode && !targetNode) {
           cloneStatus.textContent = 'Nhập node đích trước khi thử adapter.';
           cloneStatus.className = 'error';
@@ -207,7 +215,10 @@
           const endpoint = useTargetNode ? '/api/vms/clone-to-node' : '/api/vms/clone';
           const result = await readResponse(await fetch(endpoint, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Service-Key': serviceKey
+            },
             body: JSON.stringify(body)
           }));
           cloneStatus.textContent = `VM ${result.vmid} trên ${result.node} đang chạy. Guest Agent báo IP: ${result.ip_address}`;

@@ -63,6 +63,7 @@ Thêm vào `.env` trên máy LB:
 ```dotenv
 POSTGRES_PASSWORD=<mat-khau-db-manh>
 ADMIN_API_KEY=<chuoi-bi-mat-dai>
+PROXMOX_LB_SERVICE_KEY=<chuoi-bi-mat-dai-khac>
 ```
 
 Biến `SCHEDULER_NODES` cũ không còn được dùng. Trong lab theo `setup-promox.md`, cần cấu hình storage chứa template, bridge/NAT/DHCP và dung lượng trên `pve2`, `pve3` trước khi dùng round robin cho cả cụm. Scheduler hiện chỉ kiểm tra node online; nó chưa kiểm tra storage, RAM, CPU hoặc bridge trước khi thử clone.
@@ -92,6 +93,7 @@ Ví dụ clone:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/vms/clone \
+  -H 'X-Service-Key: YOUR_SERVICE_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"template_vmid":9000,"full_clone":true}'
 ```

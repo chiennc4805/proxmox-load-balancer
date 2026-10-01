@@ -1,7 +1,5 @@
-"""Import bridge for the existing `promox-adapter` directory name."""
+"""Compatibility bridge for the old flat adapter import path."""
 
-from importlib import import_module
+from backend.app.proxmox.adapter import AdapterError, AdapterSettings, ProxmoxAdapter
 
-_module = import_module("backend.app.promox-adapter.proxmox_adapter")
-AdapterError = _module.AdapterError
-ProxmoxAdapter = _module.ProxmoxAdapter
+__all__ = ["AdapterError", "AdapterSettings", "ProxmoxAdapter"]

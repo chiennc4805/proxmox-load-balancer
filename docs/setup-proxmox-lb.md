@@ -156,8 +156,9 @@ phát triển đang được dùng, chọn `--local-host-port=localhost:18080` v
 
 Template Windows trong guide có IP tĩnh `172.20.11.100`; nhiều clone sẽ
 trùng IP cho đến khi bạn triển khai cơ chế cấp IP riêng. Test một clone trước.
-API clone hiện chưa có xác thực người gọi; API cấu hình scheduler yêu cầu
-`X-Admin-Key`. Dùng IAP tunnel hoặc HTTPS khi nhập key trên giao diện.
+API clone yêu cầu `X-Service-Key` khớp với `PROXMOX_LB_SERVICE_KEY`;
+API cấu hình scheduler yêu cầu `X-Admin-Key`. Dùng private network hoặc
+HTTPS khi MalSec gửi service key đến load balancer.
 
 Tài liệu tham chiếu: [GCE instance create](https://docs.cloud.google.com/sdk/gcloud/reference/compute/instances/create),
 [IAP TCP forwarding](https://docs.cloud.google.com/iap/docs/using-tcp-forwarding),

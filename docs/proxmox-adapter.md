@@ -15,6 +15,7 @@ Ví dụ gọi API trực tiếp:
 ```bash
 curl http://localhost:8080/api/vms
 curl -X POST http://localhost:8080/api/vms/clone \
+  -H 'X-Service-Key: YOUR_SERVICE_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"template_vmid":9000,"name":"lab-test-01","full_clone":false}'
 ```
@@ -35,6 +36,7 @@ Endpoint thử riêng `POST /api/vms/clone-to-node` yêu cầu thêm `target_nod
 
 ```bash
 curl -X POST http://localhost:8080/api/vms/clone-to-node \
+  -H 'X-Service-Key: YOUR_SERVICE_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"template_vmid":9000,"target_node":"pve2","full_clone":true}'
 ```
@@ -57,4 +59,5 @@ chạy nhiều clone đồng thời, cần thiết lập cơ chế cấp IP riê
 (chẳng hạn DHCP hoặc cấu hình guest sau clone). Nếu disk local không hỗ trợ
 linked clone, bật ô **Full clone** để thử; thao tác này cần thêm dung lượng.
 
-Các endpoint hiện chỉ để thử trong mạng tin cậy, chưa có xác thực người gọi.
+Hai endpoint clone yêu cầu header `X-Service-Key` khớp với
+`PROXMOX_LB_SERVICE_KEY`. Các endpoint đọc resource không yêu cầu key.

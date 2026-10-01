@@ -122,6 +122,44 @@ class ApiWiringTests(unittest.TestCase):
             self.assertEqual(raised.exception.status_code, 401)
             _require_admin_key("secret")
 
+    def test_clone_service_key_is_required(self):
+        from fastapi import HTTPException
+        from backend.app.main import _require_service_key
+
+        with patch.dict("os.environ", {"PROXMOX_LB_SERVICE_KEY": "service-secret"}):
+            for key in (None, "wrong"):
+                with self.subTest(key=key):
+                    with self.assertRaises(HTTPException) as raised:
+                        _require_service_key(key)
+                    self.assertEqual(raised.exception.status_code, 401)
+            _require_service_key("service-secret")
+
+    def test_clone_service_key_must_be_configured(self):
+        from fastapi import HTTPException
+        from backend.app.main import _require_service_key
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(HTTPException) as raised:
+                _require_service_key("service-secret")
+            self.assertEqual(raised.exception.status_code, 503)
+
+    def test_clone_endpoints_register_service_key_dependency(self):
+        from backend.app.main import app, _require_service_key
+
+        clone_routes = {
+            route.path: route
+            for route in app.routes
+            if route.path in {"/api/vms/clone", "/api/vms/clone-to-node"}
+        }
+
+        self.assertEqual(
+            set(clone_routes),
+            {"/api/vms/clone", "/api/vms/clone-to-node"},
+        )
+        for route in clone_routes.values():
+            dependencies = [dependency.call for dependency in route.dependant.dependencies]
+            self.assertIn(_require_service_key, dependencies)
+
     def test_clone_route_calls_controller(self):
         from backend.app.main import clone_vm
 

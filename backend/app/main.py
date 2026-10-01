@@ -1,7 +1,7 @@
 import hmac
 import os
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 
 from backend.app.controllers.job_controller import JobController
 from backend.app.controllers.vm_controller import VmController
@@ -39,6 +39,14 @@ def _require_admin_key(x_admin_key: str | None = Header(default=None)) -> None:
         raise HTTPException(401, detail={"message": "Invalid admin API key"})
 
 
+def _require_service_key(x_service_key: str | None = Header(default=None)) -> None:
+    expected = os.getenv("PROXMOX_LB_SERVICE_KEY", "")
+    if not expected:
+        raise HTTPException(503, detail={"message": "Missing PROXMOX_LB_SERVICE_KEY"})
+    if not x_service_key or not hmac.compare_digest(x_service_key, expected):
+        raise HTTPException(401, detail={"message": "Invalid service API key"})
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -68,7 +76,7 @@ def list_nodes() -> list[dict]:
         raise _api_error(exc) from exc
 
 
-@app.post("/api/vms/clone")
+@app.post("/api/vms/clone", dependencies=[Depends(_require_service_key)])
 def clone_vm(request: CloneRequest) -> dict:
     try:
         return vm_controller.clone_vm(request)
@@ -80,7 +88,7 @@ def clone_vm(request: CloneRequest) -> dict:
         raise _job_store_error(exc) from exc
 
 
-@app.post("/api/vms/clone-to-node")
+@app.post("/api/vms/clone-to-node", dependencies=[Depends(_require_service_key)])
 def clone_vm_to_node(request: CloneToNodeRequest) -> dict:
     """Direct adapter test with an explicit target node."""
     try:
