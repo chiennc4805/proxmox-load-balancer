@@ -11,7 +11,7 @@ from backend.app.scheduler.store import SchedulerError, SchedulerStore
 class SchedulerStoreIntegrationTests(unittest.TestCase):
     def test_concurrent_reservations_and_persistence(self):
         store = SchedulerStore()
-        store.set_config("round_robin", ["pve1", "pve2", "pve3"])
+        store.set_config("round_robin")
         with ThreadPoolExecutor(max_workers=3) as executor:
             choices = list(executor.map(
                 lambda _: store.reserve_node(["pve3", "pve1", "pve2"])["node"],

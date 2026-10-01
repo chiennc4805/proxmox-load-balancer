@@ -25,13 +25,12 @@ class CloneToNodeRequest(CloneRequest):
 
 class SchedulerConfigRequest(BaseModel):
     algorithm: str = Field(min_length=1)
-    eligible_nodes: list[str] = Field(min_length=1)
 
 
 def _api_error(exc: AdapterError) -> HTTPException:
     return HTTPException(
         status_code=exc.status_code,
-        detail={"message": str(exc), "vmid": exc.vmid},
+        detail={"message": str(exc), "vmid": exc.vmid, "attempted_nodes": exc.attempted_nodes},
     )
 
 
@@ -60,19 +59,33 @@ def list_vms() -> list[dict]:
         raise _api_error(exc) from exc
 
 
+@app.get("/api/resources")
+def list_resources(type: str | None = None) -> list[dict]:
+    try:
+        return ProxmoxAdapter.from_env().list_resources(type)
+    except AdapterError as exc:
+        raise _api_error(exc) from exc
+
+
+@app.get("/api/nodes")
+def list_nodes() -> list[dict]:
+    try:
+        return ProxmoxAdapter.from_env().list_node_resources()
+    except AdapterError as exc:
+        raise _api_error(exc) from exc
+
+
 @app.post("/api/vms/clone")
 def clone_vm(request: CloneRequest) -> dict:
     try:
         adapter = ProxmoxAdapter.from_env()
-        choice = Scheduler(get_store()).select_node(adapter)
-        result = adapter.clone_and_get_ip(
+        return Scheduler(get_store()).clone_vm(
+            adapter,
             request.template_vmid,
             new_vmid=request.new_vmid,
             name=request.name,
             full_clone=request.full_clone,
-            target_node=choice["node"],
         )
-        return {**result, "selected_node": choice["node"], "algorithm": choice["algorithm"]}
     except AdapterError as exc:
         raise _api_error(exc) from exc
     except SchedulerError as exc:
@@ -109,6 +122,6 @@ def set_scheduler_config(
 ) -> dict:
     _require_admin_key(x_admin_key)
     try:
-        return get_store().set_config(request.algorithm, request.eligible_nodes)
+        return get_store().set_config(request.algorithm)
     except SchedulerError as exc:
         raise _scheduler_error(exc) from exc

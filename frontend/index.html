@@ -39,6 +39,19 @@
     </section>
 
     <section>
+      <h2>Node Proxmox</h2>
+      <p>Danh sách được đọc trực tiếp từ API cluster resources của Proxmox.</p>
+      <button id="refresh-nodes" type="button">Tải danh sách node</button>
+      <p id="nodes-status" role="status"></p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Node</th><th>Trạng thái</th><th>CPU</th><th>RAM tối đa</th></tr></thead>
+          <tbody id="node-list"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
       <h2>Clone VM</h2>
       <p class="warning">Lab hiện tại đặt IP tĩnh 172.20.11.100 trong Windows và không có DHCP. Bản clone sẽ giữ IP này nếu bạn chưa cấu hình lại trong guest. Chỉ nên bật một VM dùng IP đó tại một thời điểm.</p>
       <form id="clone-form">
@@ -60,13 +73,11 @@
 
     <section>
       <h2>Cấu hình scheduler (admin)</h2>
-      <p>Chỉ khai báo node đã sẵn sàng nhận clone: có storage chứa template và bridge mạng phù hợp.</p>
+      <p>Scheduler dùng mọi node online từ Proxmox. Chỉ bật node trong cluster khi storage và bridge mạng đã sẵn sàng nhận VM.</p>
       <label for="admin-key">Admin API key</label>
       <input id="admin-key" type="password" autocomplete="off" placeholder="ADMIN_API_KEY trong .env">
       <label for="algorithm">Thuật toán</label>
       <select id="algorithm"><option value="round_robin">Round robin</option></select>
-      <label for="eligible-nodes">Node được phép (cách nhau bằng dấu phẩy)</label>
-      <input id="eligible-nodes" type="text" value="pve1" placeholder="pve1,pve2,pve3">
       <div>
         <button id="load-config" type="button">Đọc cấu hình</button>
         <button id="save-config" type="button">Lưu cấu hình</button>
@@ -90,8 +101,7 @@
         if (method === 'PUT') {
           options.headers['Content-Type'] = 'application/json';
           options.body = JSON.stringify({
-            algorithm: document.getElementById('algorithm').value,
-            eligible_nodes: document.getElementById('eligible-nodes').value.split(',').map(n => n.trim()).filter(Boolean)
+            algorithm: document.getElementById('algorithm').value
           });
         }
         schedulerStatus.textContent = 'Đang xử lý...';
@@ -99,8 +109,7 @@
         try {
           const config = await readResponse(await fetch('/api/admin/scheduler', options));
           document.getElementById('algorithm').value = config.algorithm;
-          document.getElementById('eligible-nodes').value = config.eligible_nodes.join(',');
-          schedulerStatus.textContent = `Thuật toán: ${config.algorithm}; node được phép: ${config.eligible_nodes.join(', ')}; lượt gần nhất: ${config.last_node || 'chưa có'}.`;
+          schedulerStatus.textContent = `Thuật toán: ${config.algorithm}; lượt gần nhất: ${config.last_node || 'chưa có'}.`;
           schedulerStatus.className = 'success';
         } catch (error) {
           schedulerStatus.textContent = error.message;
@@ -144,7 +153,32 @@
         }
       }
 
+      async function loadNodes() {
+        const status = document.getElementById('nodes-status');
+        const body = document.getElementById('node-list');
+        status.textContent = 'Đang tải...';
+        status.className = '';
+        body.replaceChildren();
+        try {
+          const nodes = await readResponse(await fetch('/api/nodes'));
+          for (const node of nodes) {
+            const row = document.createElement('tr');
+            for (const value of [node.node, node.status, node.maxcpu ?? '', `${Math.round((node.maxmem || 0) / 1024 / 1024)} MiB`]) {
+              const cell = document.createElement('td');
+              cell.textContent = String(value);
+              row.appendChild(cell);
+            }
+            body.appendChild(row);
+          }
+          status.textContent = `${nodes.length} node; scheduler chỉ chọn node online.`;
+        } catch (error) {
+          status.textContent = error.message;
+          status.className = 'error';
+        }
+      }
+
       document.getElementById('refresh').addEventListener('click', loadVms);
+      document.getElementById('refresh-nodes').addEventListener('click', loadNodes);
       document.getElementById('clone-form').addEventListener('submit', async event => {
         event.preventDefault();
         const button = document.getElementById('clone-button');
@@ -177,7 +211,7 @@
             body: JSON.stringify(body)
           }));
           cloneStatus.textContent = `VM ${result.vmid} trên ${result.node} đang chạy. Guest Agent báo IP: ${result.ip_address}`;
-          if (result.algorithm) cloneStatus.textContent += ` Scheduler: ${result.algorithm}, node được chọn: ${result.selected_node}.`;
+          if (result.algorithm) cloneStatus.textContent += ` Scheduler: ${result.algorithm}, node được chọn: ${result.selected_node}; đã thử: ${result.attempted_nodes.join(' → ')}.`;
           cloneStatus.className = 'success';
           await loadVms();
         } catch (error) {
@@ -189,6 +223,7 @@
         }
       });
       loadVms();
+      loadNodes();
     </script>
   </body>
 </html>

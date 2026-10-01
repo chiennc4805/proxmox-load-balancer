@@ -31,6 +31,11 @@ class ProxmoxAdapterTests(unittest.TestCase):
         self.assertEqual(self.adapter.list_nodes(), ["pve1"])
         self.client.cluster.resources.get.assert_called_once_with(type="node")
 
+    def test_list_resources_calls_cluster_api(self):
+        self.client.cluster.resources.get.return_value = [{"type": "storage", "storage": "nas-nfs"}]
+        self.assertEqual(self.adapter.list_resources("storage")[0]["storage"], "nas-nfs")
+        self.client.cluster.resources.get.assert_called_once_with(type="storage")
+
     def test_clone_waits_for_tasks_and_selects_lab_ip(self):
         self.client.cluster.nextid.get.return_value = "10001"
         qemu = self.client.nodes.return_value.qemu

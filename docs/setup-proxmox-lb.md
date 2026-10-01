@@ -138,7 +138,7 @@ Trong `.env`, đặt `PVE_API_HOST=10.10.0.11` (hoặc IP node PVE bạn truy c�
 Không thêm `https://` vào host. Giữ `LAB_NETWORK_CIDR=172.20.11.0/24` nếu
 clone chạy trên mạng `vmbr1` của `pve1`.
 
-Scheduler cần thêm `POSTGRES_PASSWORD`, `ADMIN_API_KEY` và `SCHEDULER_NODES=pve1`
+Scheduler cần thêm `POSTGRES_PASSWORD` và `ADMIN_API_KEY`
 trong `.env` trước khi chạy `docker compose up`. PostgreSQL chạy nội bộ trong Compose;
 chi tiết cấu hình round robin và API admin xem [scheduler.md](scheduler.md).
 

@@ -12,10 +12,15 @@ from proxmoxer.core import ResourceException
 
 
 class AdapterError(Exception):
-    def __init__(self, message: str, status_code: int = 502, vmid: int | None = None):
+    def __init__(
+        self, message: str, status_code: int = 502, vmid: int | None = None,
+        retryable: bool = False,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.vmid = vmid
+        self.retryable = retryable
+        self.attempted_nodes: list[str] = []
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -87,11 +92,18 @@ class ProxmoxAdapter:
     def from_env(cls) -> "ProxmoxAdapter":
         return cls(AdapterSettings.from_env())
 
-    def list_vms(self) -> list[dict]:
+    def list_resources(self, resource_type: str | None = None) -> list[dict]:
+        """Read cluster resources directly from Proxmox VE."""
+        if resource_type not in (None, "vm", "node", "storage"):
+            raise AdapterError("Loại resource không hợp lệ", 400)
         try:
-            resources = self.proxmox.cluster.resources.get(type="vm")
+            params = {"type": resource_type} if resource_type else {}
+            return self.proxmox.cluster.resources.get(**params)
         except Exception as exc:
-            raise AdapterError("Không lấy được danh sách VM từ Proxmox") from exc
+            raise AdapterError("Không lấy được cluster resources từ Proxmox") from exc
+
+    def list_vms(self) -> list[dict]:
+        resources = self.list_resources("vm")
         return sorted(
             (
                 {
@@ -110,12 +122,15 @@ class ProxmoxAdapter:
             key=lambda vm: vm["vmid"],
         )
 
+    def list_node_resources(self) -> list[dict]:
+        return sorted(
+            (resource for resource in self.list_resources("node") if resource.get("type") == "node"),
+            key=lambda resource: resource.get("node", ""),
+        )
+
     def list_nodes(self) -> list[str]:
         """Return online Proxmox nodes available to the scheduler."""
-        try:
-            resources = self.proxmox.cluster.resources.get(type="node")
-        except Exception as exc:
-            raise AdapterError("Không lấy được danh sách node từ Proxmox") from exc
+        resources = self.list_node_resources()
         return sorted({
             resource["node"] for resource in resources
             if resource.get("type") == "node"
@@ -123,7 +138,10 @@ class ProxmoxAdapter:
             and resource.get("node")
         })
 
-    def _wait_task(self, node: str, upid: str, timeout: int, label: str, vmid: int):
+    def _wait_task(
+        self, node: str, upid: str, timeout: int, label: str, vmid: int,
+        retryable_on_failure: bool = False,
+    ):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -133,7 +151,8 @@ class ProxmoxAdapter:
             if state.get("status") == "stopped":
                 if state.get("exitstatus") != "OK":
                     raise AdapterError(
-                        f"{label} thất bại: {state.get('exitstatus', 'không rõ lý do')}", vmid=vmid
+                        f"{label} thất bại: {state.get('exitstatus', 'không rõ lý do')}",
+                        vmid=vmid, retryable=retryable_on_failure,
                     )
                 return
             time.sleep(2)
@@ -219,6 +238,10 @@ class ProxmoxAdapter:
             vmid,
         )
 
+    def vm_exists(self, vmid: int) -> bool:
+        """Check cluster state before retrying a failed clone on another node."""
+        return any(vm["vmid"] == vmid for vm in self.list_vms())
+
     def clone_and_get_ip(
         self, template_vmid: int, *, new_vmid: int | None = None,
         name: str | None = None, full_clone: bool = False,
@@ -253,11 +276,19 @@ class ProxmoxAdapter:
         except ResourceException as exc:
             reason = str(exc.content or exc.status_message)[:300]
             raise AdapterError(
-                f"Proxmox từ chối clone template {template_vmid} sang {target_node}: {reason}"
+                f"Proxmox từ chối clone template {template_vmid} sang {target_node}: {reason}",
+                vmid=vmid,
+                retryable=getattr(exc, "status_code", None) not in (401, 403, 409),
             ) from exc
         except Exception as exc:
-            raise AdapterError(f"Proxmox từ chối clone template {template_vmid} sang {target_node}") from exc
-        self._wait_task(source_node, upid, self.settings.clone_timeout, "clone VM", vmid)
+            raise AdapterError(
+                f"Không xác định được kết quả clone template {template_vmid} sang {target_node}",
+                vmid=vmid,
+            ) from exc
+        self._wait_task(
+            source_node, upid, self.settings.clone_timeout, "clone VM", vmid,
+            retryable_on_failure=True,
+        )
 
         clone_mac = self._prepare_clone_network(source_node, target_node, template_vmid, vmid)
 
