@@ -15,9 +15,10 @@ services:
     restart: unless-stopped
 
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    # build:
+    #   context: .
+    #   dockerfile: backend/Dockerfile
+    image: chiennc4805/proxlb-backend:latest
     env_file:
       - .env
     environment:
@@ -31,8 +32,9 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: ./frontend
+    # build:
+    #   context: ./frontend
+    image: chiennc4805/proxlb-frontend:latest
     ports:
       - "8082:80"
     depends_on:
