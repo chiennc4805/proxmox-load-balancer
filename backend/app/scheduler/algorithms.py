@@ -10,7 +10,9 @@ class RoundRobin(Algorithm):
 
     @staticmethod
     def select(
-        nodes: Sequence[str], last_node: str | None, excluded_nodes: Sequence[str] = ()
+        nodes: Sequence[str], 
+        last_node: str | None, 
+        excluded_nodes: Sequence[str] = ()
     ) -> str:
         if not nodes:
             raise ValueError("Round robin cần ít nhất một node")
