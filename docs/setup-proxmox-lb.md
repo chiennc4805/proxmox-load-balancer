@@ -100,7 +100,7 @@ gcloud compute ssh proxmox-lb \
   --command='mkdir -p ~/proxmox-load-balancer'
 
 gcloud compute scp --recurse \
-  backend frontend core config.py compose.yaml .dockerignore .env.example \
+  backend frontend compose.yaml .dockerignore .env.example \
   proxmox-lb:~/proxmox-load-balancer/ \
   --zone=asia-southeast1-b \
   --tunnel-through-iap

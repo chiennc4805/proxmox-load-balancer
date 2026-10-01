@@ -1,14 +1,4 @@
-from abc import ABC, abstractmethod
-
-class ProvisioningEngine(ABC):
-
-    def __init__(self):
-        ...
-
-    
-    @abstractmethod
-    def provision(self):
-        ...
+﻿from abc import ABC, abstractmethod
 
 
 class Algorithm(ABC):

@@ -15,7 +15,6 @@ docker compose logs -f backend frontend
 docker compose down
 ```
 
-Dockerfile backend dùng build context là thư mục gốc để chứa cả `backend/`,
-`core/` và `config.py`. Dockerfile frontend dùng build context là `frontend/`.
-Hiện API chỉ có endpoint kiểm tra trạng thái; phần xử lý job, Kafka và
-PostgreSQL chưa được kết nối.
+Dockerfile backend dùng build context là thư mục gốc và chỉ copy `backend/` vào image.
+Dockerfile frontend dùng build context là `frontend/`. API hiện có health check,
+danh sách VM/node/resources, clone VM qua scheduler và cấu hình scheduler lưu trong PostgreSQL.
