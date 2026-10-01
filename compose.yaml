@@ -34,7 +34,7 @@ services:
   frontend:
     # build:
     #   context: ./frontend
-    image: chiennc4805/proxlb-frontend:latest
+    image: chiennc4805/proxlb-frontend:1.0.0
     ports:
       - "8082:80"
     depends_on:
