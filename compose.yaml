@@ -18,7 +18,7 @@ services:
     # build:
     #   context: .
     #   dockerfile: backend/Dockerfile
-    image: chiennc4805/proxlb-backend:latest
+    image: chiennc4805/proxlb-backend:1.0.0
     env_file:
       - .env
     environment:
