@@ -1,6 +1,6 @@
 # Proxmox Gateway — Config-Driven Workflow Orchestration & Resource Scheduling
 
-> **Trạng thái:** Tài liệu định hướng kiến trúc (architecture baseline), dùng làm ngữ cảnh triển khai dự án. Các API, DSL, database schema và đoạn mã bên dưới là **thiết kế đề xuất**, chưa phải tính năng đã được hiện thực.
+> **Trạng thái:** Tài liệu định hướng **kiến trúc production đích** (architecture baseline), dùng làm ngữ cảnh dài hạn của dự án. Các API, DSL, database schema và đoạn mã bên dưới là **thiết kế đề xuất**, chưa phải tính năng đã được hiện thực. Phạm vi thử nghiệm đầu tiên được đặc tả riêng tại [`docs/vertical-slice-0.md`](docs/vertical-slice-0.md).
 >
 > **Mục tiêu:** Xây dựng một lớp điều khiển mở rộng cho Proxmox VE, cho phép điều phối tài nguyên, tự động cấp phát một hoặc nhiều VM, và tùy biến hành vi API bằng workflow cấu hình động mà không phải chỉnh sửa Gateway cho từng nghiệp vụ.
 
@@ -41,6 +41,12 @@ flowchart LR
 
 Một số Proxmox API tạo VM sử dụng đường dẫn chứa tên node, ví dụ `POST /api2/json/nodes/{node}/qemu`; clone sử dụng `POST /api2/json/nodes/{source_node}/qemu/{vmid}/clone`. Điều này khiến hệ thống hiện tại phải biết/chỉ định node, thường dẫn đến hardcode.
 
+Gateway mở rộng đúng vị trí vốn biểu diễn **target placement** mà không đổi bản chất operation:
+
+- Create: `/nodes/auto/qemu` yêu cầu Gateway tự chọn target; `/nodes/{real_node}/qemu` giữ target do người dùng chỉ định.
+- Clone: source node vẫn nằm trong path; `target=auto` trong body yêu cầu Gateway chọn target, `target=<real_node>` là fixed placement, còn thiếu `target` giữ nguyên hành vi Proxmox là clone tại source node.
+- Tất cả create/clone, dù `AUTO` hay `FIXED`, đều đi qua workflow tương ứng để filter, reserve, accounting và theo dõi task; đây không phải hai contract API khác nhau.
+
 ### 1.2. Những bài toán cần giải quyết
 
 1. **Automatic placement:** Chọn node dựa trên CPU, RAM, storage, network, template và chính sách scheduling thay vì hardcode node.
@@ -59,6 +65,8 @@ Một số Proxmox API tạo VM sử dụng đường dẫn chứa tên node, v�
 
 - Giữ **một catch-all controller** cho bề mặt Proxmox-compatible API; website không phải biết chi tiết routing nội bộ của proxy.
 - Hỗ trợ **pass-through**, **policy interception** và **workflow override** bằng cấu hình route.
+- Giữ **request compatibility** và **behavioral compatibility** theo từng endpoint: method, path, body và ý nghĩa operation của Proxmox không bị thay đổi ngoài những extension được công bố rõ như `auto`.
+- Mỗi endpoint có một response contract ổn định; cùng một endpoint không đổi format chỉ vì Gateway chọn pass-through hay workflow ở bên trong.
 - Cho phép workflow dạng **declarative DAG** được định nghĩa/publish qua Management API/UI.
 - Chuẩn hóa Action Contract và tái sử dụng capability qua nhiều workflow.
 - Cho phép chỉnh chiến lược/constraints/trọng số scheduler bằng Policy Editor nếu DSL đã hỗ trợ.
@@ -70,7 +78,7 @@ Một số Proxmox API tạo VM sử dụng đường dẫn chứa tên node, v�
 - Không xây môi trường thực thi Python tùy ý từ mã do người dùng nhập trên UI.
 - Không xây **Action Builder**; Action Catalog trên UI là **read-only**.
 - Không bắt buộc RabbitMQ/Redis/Outbox trong phiên bản kiến trúc đầu tiên.
-- Không cố mô phỏng 100% response semantics của Proxmox ở những API đã bị workflow override.
+- Không cam kết mọi Gateway-specific orchestration endpoint có wire contract giống Proxmox; endpoint nhiều bước có thể công bố `202 + job_id` riêng.
 - Không xây microservice riêng cho Compiler, Registry, DAG Engine, Scheduler hoặc từng Action.
 - Không tạo hệ thống live migration/HA mới thay thế cơ chế Proxmox hiện hữu.
 
@@ -80,7 +88,11 @@ Một số Proxmox API tạo VM sử dụng đường dẫn chứa tên node, v�
 - **Policy/Strategy = How to decide:** quy định ràng buộc và cách đánh giá/lựa chọn, ví dụ node placement.
 - **Action/Capability = What the platform can do:** thực thi năng lực đã được cài đặt, có schema và quyền rõ ràng.
 - **Gateway routes once:** Controller/Route Matcher quyết định proxy hoặc workflow; Worker không phân loại lại HTTP request.
-- **Worker executes; Engine orchestrates:** DAG Engine là **module nằm bên trong Worker process**, không phải service riêng.
+- **Endpoint owns the contract:** route quyết định contract trước khi thực thi; pass-through và workflow của cùng endpoint phải đi qua cùng response/error adapter.
+- **Preserve operation boundaries:** endpoint create chỉ create, endpoint clone chỉ clone. Configure, start hoặc guest readiness là operation/workflow khác, không âm thầm ghép vào create/clone.
+- **Placement respects intent:** `AUTO` được phép chọn node; `FIXED` chỉ kiểm tra và giữ đúng node người dùng yêu cầu, không tự fallback.
+- **Gateway owns the response boundary:** workflow gắn với endpoint có thể chạy admission prefix trong Gateway đến khi nhận và persist UPID; Worker/Reconciler tiếp tục theo dõi task sau khi HTTP response đã trả.
+- **Worker executes; Engine orchestrates:** workflow bất đồng bộ và durable continuation chạy qua DAG Engine bên trong Worker process, không phải service Engine riêng.
 - **Database is source of truth:** PostgreSQL lưu workflow đã publish, plan, job, step, reservation, inventory.
 - **No mandatory semantic versioning:** Không bắt buộc `workflow@1.0.0` hoặc `action@1`. Vẫn giữ execution plan snapshot bất biến cho mỗi job.
 - **Safe by default:** Không cho workflow tùy ý thực thi lệnh, gọi URL bất kỳ hoặc vượt quyền của tenant.
@@ -93,6 +105,11 @@ Một số Proxmox API tạo VM sử dụng đường dẫn chứa tên node, v�
 | Runtime | `gateway`, `worker`, `reconciler` (có thể chạy riêng) | Scale theo tải nhưng dùng chung contracts |
 | Queue | **PostgreSQL-backed job queue** | Tránh thêm RabbitMQ và Outbox khi chưa cần |
 | HTTP | **Một catch-all Proxmox controller** + Management API | Không phải mirror từng Proxmox endpoint |
+| API compatibility | **Giữ method/path/body và operation semantics theo endpoint** | Có thể mở rộng sentinel như `auto` nhưng không đổi nghĩa request hợp lệ hiện hữu |
+| Provision mutation | **Create/clone luôn qua workflow tương ứng** | Kể cả fixed node vẫn cần filter, reservation, accounting và task tracking |
+| Placement intent | **`AUTO` chọn node; `FIXED` giữ node được chỉ định** | Fixed placement không scoring và không fallback sang node khác |
+| Endpoint response | **Create/clone trả response chứa UPID thật của Proxmox** | HTTP response xác nhận task được Proxmox chấp nhận; client theo dõi task qua UPID |
+| Error boundary | **Public error theo ngữ nghĩa endpoint; provenance chỉ lưu nội bộ** | Client nhìn thấy một hệ thống, vận hành vẫn phân biệt nguồn lỗi để chẩn đoán/recovery |
 | Workflow | **YAML/JSON DSL, runtime publish vào PostgreSQL** | Tạo workflow mà không restart worker |
 | Workflow store | **PostgreSQL** | Lưu definition, compiled plan, trạng thái active |
 | Action Registry | **In-memory, trong từng process cần dùng** | Tên Action ánh xạ tới contract và Python implementation |
@@ -102,6 +119,8 @@ Một số Proxmox API tạo VM sử dụng đường dẫn chứa tên node, v�
 | Policy | **Cấu hình động, validate/publish qua DB** | Chỉnh constraints/weights không deploy code |
 | Engine | **Durable DAG executor bên trong Worker** | Quản lý state, dependencies và recovery |
 | Execution snapshot | **Compiled plan được pin vào Job** | Job cũ không đổi cấu trúc khi workflow được cập nhật |
+| Idempotency | **Bắt buộc với provision mutation ở production** | Cùng key/cùng request trả lại operation cũ; cùng key/body khác bị từ chối |
+| Identity | **Client xác thực với Gateway; Gateway dùng service credential gọi Proxmox** | Không chuyển tiếp credential Proxmox của client |
 | Guacamole | **Website backend quản lý session** | Gateway chỉ cấp VM và thông tin readiness |
 
 > ⚠️ **Về thay đổi Action code:** Plan snapshot chỉ giữ cấu trúc workflow và dữ liệu cấu hình, **không đóng băng Python implementation**. Khi đổi implementation không tương thích, cần drain job hoặc triển khai theo chính sách tương thích; nếu cần bảo đảm chạy logic cũ tuyệt đối thì phải giữ runtime/image cũ cho các job đang chạy.
@@ -112,19 +131,22 @@ Một số Proxmox API tạo VM sử dụng đường dẫn chứa tên node, v�
 
 ```mermaid
 flowchart TB
-    WEB[Website Backend / Admin UI]
+    CLIENT[Website Backend / Direct API Client / Admin UI]
 
     subgraph API[Gateway process]
         CTRL[Single catch-all Proxmox Controller]
         AUTH[Authentication / Authorization]
         ROUTE[Route Matcher + Policy Pipeline]
         PROXY[Pass-through Proxy]
-        JOBAPI[Job Submission + Status]
+        ADMIT[Endpoint Workflow Admission]
+        RESP[Endpoint Contract Adapter]
+        JOBAPI[Composite Job Submission + Status]
         MGMT[Workflow / Policy Management API]
         COMP[Workflow Compiler]
         CTRL --> AUTH --> ROUTE
-        ROUTE -->|proxy| PROXY
-        ROUTE -->|workflow| JOBAPI
+        ROUTE -->|pass-through| PROXY --> RESP
+        ROUTE -->|endpoint workflow| ADMIT --> RESP
+        ROUTE -->|composite workflow| JOBAPI
         MGMT --> COMP
     end
 
@@ -151,12 +173,17 @@ flowchart TB
     PVE[Proxmox Cluster API]
     GUA[Apache Guacamole]
 
-    WEB --> CTRL
-    WEB --> MGMT
-    WEB --> GUA
+    CLIENT --> CTRL
+    RESP --> CLIENT
+    CLIENT --> MGMT
+    CLIENT --> GUA
     MGMT --> WF
     COMP --> WF
     ROUTE <--> WF
+    ADMIT --> WF
+    ADMIT --> JOBS
+    ADMIT <--> RES
+    ADMIT --> PVE
     JOBAPI --> WF
     JOBAPI --> JOBS
     JOBS --> CONSUMER
@@ -170,7 +197,7 @@ flowchart TB
     GUA -. guest SSH/RDP .-> PVE
 ```
 
-**Lưu ý sơ đồ:** Đường Guacamole → Proxmox Cluster tượng trưng cho tuyến mạng tới *guest VM*, không phải Guacamole SSH/RDP vào hypervisor. Management API có thể nằm trong cùng FastAPI application nhưng là nhóm route quản trị khác với catch-all Proxmox API.
+**Lưu ý sơ đồ:** `Endpoint Workflow Admission` chạy phần response-critical của create/clone trong request lifecycle: normalize, filter, reserve, submit Proxmox task và persist UPID. HTTP response được trả ngay khi đạt response milestone của endpoint; Worker/Reconciler tiếp tục theo dõi terminal status và commit/release reservation. Đường Guacamole → Proxmox Cluster tượng trưng cho tuyến mạng tới *guest VM*, không phải Guacamole SSH/RDP vào hypervisor. Management API có thể nằm trong cùng FastAPI application nhưng là nhóm route quản trị khác với catch-all Proxmox API.
 
 ### 4.2. Sơ đồ physical deployment
 
@@ -210,10 +237,12 @@ Khởi đầu có thể chạy **1 Gateway + 1 Worker + PostgreSQL**; Reconciler
 | `route_matcher` | Tra cứu route rules đang active, áp dụng precedence rõ ràng |
 | `policy_pipeline` | Quota, audit, request/response modification theo policy |
 | `proxy_executor` | Chuyển tiếp API được cho phép tới Proxmox |
-| `job_service` | Validate input, idempotency, chọn compiled plan, tạo job |
+| `operation_service` | Validate input/idempotency, pin plan, persist internal operation và điều phối response milestone |
+| `response_adapter` | Giữ contract theo endpoint; map public error theo ngữ nghĩa mà không lộ component origin |
+| `job_service` | Submit và truy vấn composite workflow có public job contract |
 | `management` | Tạo draft, validate, publish, deactivate workflow/policy/route |
 
-**Bảo đảm:** Không bắt Controller biết `create`, `clone`, `migrate`, `snapshot` ở mức business logic. Các operation đặc biệt được cấu hình bằng route binding và workflow.
+**Bảo đảm:** Không bắt Controller biết `create`, `clone`, `migrate`, `snapshot` ở mức business logic. Route binding đưa toàn bộ endpoint create/clone vào workflow tương ứng, không phân nhánh pass-through chỉ vì path chứa node thật. Auto/fixed placement được normalize bên trong capability, còn Controller vẫn generic.
 
 ### 5.2. Compiler và Workflow Store
 
@@ -232,7 +261,7 @@ Không compile tùy ý khi Worker nhận mỗi job. **Compile lúc publish**; Wo
 - **DAG Engine** là Python object/module bên trong Worker, lựa chọn step đủ dependencies, binding input, gọi Action Runner và persist step state.
 - **Action Runner** resolve `uses` qua Local Action Registry và thực thi đúng Action Contract.
 - **Checkpoint/Recovery** lưu bước đã thành công, trạng thái tác vụ ngoài, retry schedule và lỗi.
-- **External Task Tracking** theo dõi Proxmox UPID; tác vụ lâu có thể chuyển sang `WAITING` để nhường slot.
+- **External Task Tracking** tiếp tục theo dõi Proxmox UPID sau khi HTTP response đã trả; tác vụ lâu có thể chuyển sang `WAITING` để nhường slot.
 
 ```mermaid
 flowchart TD
@@ -263,7 +292,7 @@ Action Registry đơn giản là **mapping trong RAM của mỗi process** từ 
 
 - **Lưu ở đâu?** Python source/package trong image; mapping tạo lại trong RAM khi process khởi động.
 - **Đăng ký khi nào?** Bootstrap tự import các module Action trong trusted packages; decorator/registration function đưa class vào mapping.
-- **Ai cần nó?** Compiler ở Gateway cần **contracts**; Worker cần **contracts và implementation**.
+- **Ai cần nó?** Compiler ở Gateway cần **contracts**; Gateway admission executor cần implementation của các response-critical Action được allowlist; Worker cần contracts và implementation cho durable continuation/composite workflows.
 - **Workflow mới có tạo Action mới không?** Không. Workflow chỉ tham chiếu Action đã có; người dùng không tạo Action code trên UI.
 - **Action mới hoàn toàn?** Developer viết plugin Python và deploy worker/gateway có hỗ trợ. Có thể thêm mô hình external plugin executor về sau, không thuộc baseline.
 
@@ -306,6 +335,7 @@ sequenceDiagram
     participant API as Management API
     participant C as Compiler
     participant DB as PostgreSQL
+    participant G as Gateway Admission
     participant W as Worker
     U->>UI: Tạo / sửa YAML hoặc graph
     UI->>API: Save draft
@@ -315,11 +345,12 @@ sequenceDiagram
     API->>C: Compile against Action contracts
     C-->>API: Immutable compiled plan
     API->>DB: Atomic write plan + activate pointer
-    Note over DB,W: Không restart Worker
-    W->>DB: Claim job mới, đọc plan được pin
+    Note over DB,W: Không restart Gateway/Worker
+    G->>DB: Endpoint request mới pin active plan
+    W->>DB: Claim composite job / durable continuation, đọc pinned plan
 ```
 
-**Workflow Store PostgreSQL** là nguồn sự thật; không cần đồng bộ một dictionary workflow tới mọi worker. Một workflow đã publish có thể dùng ngay nếu các Worker đang vận hành hỗ trợ đủ các Action được tham chiếu.
+**Workflow Store PostgreSQL** là nguồn sự thật; không cần đồng bộ một dictionary workflow tới mọi process. Endpoint admission pin active plan khi nhận request mới; Worker tải plan đã pin khi claim composite job hoặc durable continuation. Workflow đã publish chỉ được activate nếu Gateway/Worker deployment liên quan hỗ trợ đủ Action được tham chiếu.
 
 ### 6.3. Policy: runtime editing, validation và snapshot
 
@@ -338,46 +369,68 @@ Mỗi workflow có một **active plan pointer**. Khi publish thay đổi, hệ 
 
 ### 7.1. Pass-through API
 
-1. Website gọi một endpoint thuộc `/api2/json/{path:path}`.
+1. Website backend hoặc direct API client gọi một endpoint thuộc `/api2/json/{path:path}`.
 2. Gateway xác thực identity/tenant, match route, thực hiện policy bắt buộc.
 3. Nếu route cho phép pass-through, Gateway forward request tới Proxmox với quyền phù hợp.
-4. Response trả về Website; audit log ghi lại correlation ID.
+4. Response trả về client theo endpoint contract; audit log ghi lại correlation ID.
 
 > ⚠️ **Không được pass-through mù quáng:** Các lệnh thay đổi VM/node/storage có thể ảnh hưởng resource accounting. Cần route allowlist, authorization, audit và reconciliation hoặc workflow override. Hạn chế proxy tới endpoint nguy hiểm bằng token đặc quyền.
 
-### 7.2. Provision một VM
+### 7.2. Create VM qua endpoint workflow
+
+Cả `POST /api2/json/nodes/auto/qemu` và `POST /api2/json/nodes/{real_node}/qemu` đều đi qua cùng workflow create. Khác biệt chỉ nằm ở placement intent:
+
+- `node=auto` → `AUTO`: filter toàn bộ candidate, chạy strategy và reserve node được chọn.
+- `node=<real_node>` → `FIXED`: filter đúng node đó, reserve nếu hợp lệ; nếu không hợp lệ thì trả lỗi và **không fallback**.
+
+Workflow chỉ thực hiện đúng operation create. Nó không tự configure, start hoặc chờ guest readiness. Gateway giữ nguyên body Proxmox, chỉ thay sentinel `auto` trong upstream path bằng target node đã chọn.
+
+### 7.3. Clone VM qua endpoint workflow
+
+Endpoint giữ nguyên source semantics của Proxmox:
+
+```text
+POST /api2/json/nodes/{source_node}/qemu/{vmid}/clone
+```
+
+| Giá trị `target` trong body | Placement intent | Hành vi |
+|:--|:--|:--|
+| Không có `target` | `FIXED(source_node)` | Giữ nguyên native behavior; không tự chèn `target` |
+| `target=<real_node>` | `FIXED(real_node)` | Filter và dùng đúng node được chỉ định |
+| `target=auto` | `AUTO` | Gateway chọn node rồi chỉ thay `auto` bằng node thật trước khi gọi Proxmox |
+
+Gateway không dùng `/nodes/auto/.../clone` để thay source node và không tự tìm source trong contract này. Create và clone là hai workflow riêng, cùng tái sử dụng placement/reservation/task-tracking capabilities.
+
+### 7.4. Response milestone và terminal state
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant WEB as Website Backend
-    participant GW as Gateway
+    participant C as API Client
+    participant GW as Gateway / Admission
     participant DB as PostgreSQL
-    participant WK as Worker / Engine
-    participant PL as Placement Capability
     participant PVE as Proxmox API
-    WEB->>GW: POST provision + idempotency key
-    GW->>DB: Transaction: pin active plan, create job
-    GW-->>WEB: 202 + job_id
-    WK->>DB: Claim job + lease
-    WK->>PL: placement.reserve(requirements)
-    PL->>PVE: Read cluster/VM/storage state
-    PL->>DB: Atomic capacity check + reservation
-    PL-->>WK: Target node + reservation_id
-    WK->>PVE: Clone/create VM + config
-    PVE-->>WK: UPID / task reference
-    WK->>DB: Persist external task + WAITING
-    WK->>PVE: Poll/reconcile task status
-    PVE-->>WK: Finished + exit status
-    WK->>PVE: Start VM / verify readiness
-    WK->>DB: Commit allocation + job SUCCEEDED
-    WEB->>GW: GET job status
-    GW-->>WEB: READY + VM details
+    participant TR as Worker / Reconciler
+    C->>GW: create/clone + Idempotency-Key
+    GW->>PVE: collect source/node/storage state
+    GW->>DB: atomic filter recheck + reservation + operation
+    GW->>PVE: submit exactly one create/clone operation
+    PVE-->>GW: real UPID response
+    GW->>DB: persist UPID + task node
+    GW-->>C: original endpoint response containing Proxmox UPID
+    C->>GW: poll native task status with UPID
+    GW->>PVE: proxy task status request
+    PVE-->>GW: task status / exit status
+    GW-->>C: endpoint response with task status
+    TR->>PVE: independently track terminal task state
+    TR->>DB: commit allocation or release/reconcile reservation
 ```
 
-**Quy tắc:** Trả UPID không đồng nghĩa task thành công. Worker phải xác nhận task kết thúc thành công và guest thực sự sẵn sàng. Website chỉ tạo Guacamole connection khi đã nhận `READY` và có tuyến mạng SSH/RDP tới guest VM.
+HTTP success chỉ có nghĩa Proxmox đã chấp nhận task và trả UPID. VM chỉ được coi là tạo thành công khi task đạt terminal success và VM thực tế tồn tại. Internal operation/job tiếp tục sống sau HTTP response nhưng `job_id` không phải public contract bắt buộc của create/clone.
 
-### 7.3. Tạo lab gồm nhiều VM
+### 7.5. Composite provisioning và lab nhiều VM
+
+Configure, cloud-init, start, guest readiness hoặc một lab nhiều VM thuộc **composite orchestration**, không thuộc create/clone endpoint workflow. Gateway-specific endpoint cho loại nghiệp vụ này có thể trả `202 Accepted + job_id` vì một job có thể chứa nhiều Proxmox task/UPID.
 
 1. Website gửi `LabSpec` gồm danh sách VM, topology, dependencies và placement constraints.
 2. Worker dùng **group planning/reservation** để kiểm tra năng lực của toàn bộ lab trước khi tạo VM đầu tiên.
@@ -386,7 +439,7 @@ sequenceDiagram
 5. Nếu một VM thất bại, áp dụng **partial-failure policy** (`retain`/`cleanup` theo cấu hình), reconcile những VM đã được tạo.
 6. Group inventory phản ánh trạng thái lab và VM con; không giả định Proxmox cung cấp một distributed transaction cho toàn bộ lab.
 
-### 7.4. Override hành vi endpoint khác
+### 7.6. Override hành vi endpoint khác
 
 Ví dụ migrate VM:
 
@@ -395,68 +448,70 @@ Ví dụ migrate VM:
 - Gọi Proxmox migrate API và theo dõi UPID.
 - Reconcile allocation của **source + target node** khi migration hoàn tất.
 
-Clone, migrate, snapshot hoặc delete có thể chia sẻ Action theo contract, nhưng không cần ép các nghiệp vụ sử dụng cùng một workflow cứng.
+Clone, create, migrate, snapshot hoặc delete có thể chia sẻ Action theo contract, nhưng không ép các nghiệp vụ có operation semantics khác nhau vào cùng một workflow cứng.
 
 ## 8. Workflow DSL và Action Contract
 
-### 8.1. Ví dụ Workflow Definition (minh họa)
+### 8.1. Ví dụ endpoint workflow cho clone (minh họa)
 
 ```yaml
-name: vm.provision
-mode: async
-input_schema: vm.provision.input
+name: qemu.clone
+mode: endpoint
+input_schema: proxmox.qemu.clone.request
+response_contract: proxmox.upid
+response_milestone: clone_submitted
 
 steps:
-  - id: template
-    uses: template.resolve
+  - id: source
+    uses: proxmox.vm.resolve_source
     with:
-      vmid: "${input.template_vmid}"
+      node: "${path.source_node}"
+      vmid: "${path.vmid}"
 
   - id: placement
-    uses: placement.reserve
-    needs: [template]
+    uses: placement.resolve_and_reserve
+    needs: [source]
     with:
-      resources: "${input.resources}"
-      policy: "${input.placement_policy}"
-      template: "${steps.template.output}"
+      # target=auto -> AUTO; target=<node> -> FIXED(node);
+      # omitted target -> FIXED(path.source_node)
+      requested_target: "${input.target}"
+      default_target: "${path.source_node}"
+      resources: "${steps.source.output.resources}"
 
-  - id: clone
+  - id: clone_submitted
     uses: proxmox.vm.clone
     needs: [placement]
     with:
-      source: "${steps.template.output}"
-      target_node: "${steps.placement.output.node}"
+      original_request: "${input}"
+      source_node: "${path.source_node}"
+      source_vmid: "${path.vmid}"
+      resolved_target: "${steps.placement.output.node}"
       reservation_id: "${steps.placement.output.reservation_id}"
 
+continuation:
   - id: clone_done
     uses: proxmox.task.wait
-    needs: [clone]
+    needs: [clone_submitted]
     with:
-      task_node: "${steps.clone.output.task_node}"
-      upid: "${steps.clone.output.upid}"
-
-  - id: ready
-    uses: guest.wait_ready
-    needs: [clone_done]
-    with:
-      vmid: "${steps.clone.output.vmid}"
-      protocol: "${input.protocol}"
+      task_node: "${steps.clone_submitted.output.task_node}"
+      upid: "${steps.clone_submitted.output.upid}"
 
   - id: commit
     uses: placement.commit
-    needs: [ready]
+    needs: [clone_done]
     with:
       reservation_id: "${steps.placement.output.reservation_id}"
 
 on_failure:
-  uses: provision.reconcile
+  uses: placement.release_or_reconcile
 
-outputs:
-  vmid: "${steps.clone.output.vmid}"
-  node: "${steps.placement.output.node}"
+response:
+  from: "${steps.clone_submitted.output.proxmox_response}"
 ```
 
-> 💡 **Ví dụ rút gọn:** Trong thực tế còn cần cloud-init, IP allocation, cập nhật network, start VM (nếu clone chưa tự start), guest readiness, status tracking và idempotency theo từng step. Cấu trúc DSL trên là **đề xuất của dự án**, chưa có parser/runtime sẵn.
+`response_milestone` cho phép Gateway trả response chứa UPID thật ngay sau khi Proxmox chấp nhận clone, trong khi durable continuation vẫn theo dõi task để commit/release tài nguyên. Workflow này **không** configure, start hay chờ guest readiness. Những bước đó thuộc composite orchestration riêng và có thể dùng public job contract.
+
+> 💡 Cấu trúc DSL trên là thiết kế production đề xuất, chưa phải syntax đã được parser/runtime hiện thực. Expression và binding phải sandboxed; không dùng Python `eval()`.
 
 ### 8.2. Action Contract
 
@@ -516,17 +571,24 @@ Người quản trị có thể thay weights, constraints và chọn chiến lư
 
 ```mermaid
 flowchart TD
-    A[placement.reserve] --> B[Collect Proxmox node / VM / storage state]
+    A[placement.resolve_and_reserve] --> B[Collect Proxmox node / VM / storage state]
     B --> C[Join inventory + active reservations]
-    C --> D[Hard constraint filtering]
-    D --> E[Strategy ranking - Weighted / TOPSIS / ...]
-    E --> F[Choose candidate]
-    F --> G[DB transaction: recheck + reserve]
-    G --> H{Capacity still available?}
-    H -->|No| I[Next candidate / pending capacity]
-    I --> F
-    H -->|Yes| J[Return target + reservation_id]
+    C --> D{Placement intent}
+    D -->|AUTO| E[Hard-filter all candidates]
+    E --> F[Strategy ranking - RR / Weighted / TOPSIS / ...]
+    F --> G[Choose candidate]
+    D -->|FIXED| H[Hard-filter exactly requested node]
+    H -->|Rejected| X[Return endpoint error - no fallback]
+    H -->|Eligible| G
+    G --> I[DB transaction: recheck + reserve]
+    I --> J{Capacity still available?}
+    J -->|No, AUTO| K[Try next eligible candidate / pending capacity]
+    K --> G
+    J -->|No, FIXED| X
+    J -->|Yes| L[Return target + reservation_id]
 ```
+
+Create lấy intent từ `{node}` trong path (`auto` hoặc node thật). Clone giữ source node trong path và lấy intent từ body: thiếu `target` là `FIXED(source_node)`, node thật là `FIXED(node)`, `target=auto` là `AUTO`. Fixed placement không chạy scoring và không bao giờ âm thầm đổi node.
 
 ### 9.2. Resource accounting
 
@@ -543,7 +605,7 @@ flowchart TD
 - Cùng một logical resource có một quy tắc khóa nhất quán để hạn chế deadlock.
 - Commit transaction nhanh; **không giữ DB row lock trong lúc Proxmox clone VM**.
 - Reservation có lifecycle `HELD` → `ALLOCATED` hoặc `RELEASED`/`RECONCILING`.
-- Reconciliation đối chiếu tình trạng VM thật nếu người dùng thay đổi Proxmox trực tiếp hoặc external task mất kết quả.
+- Reconciliation đối chiếu tình trạng VM thật khi có HA/migration/restart nội bộ, break-glass administration, inventory drift hoặc external task mất kết quả. Gateway là mutation ingress chính nhưng Proxmox vẫn là source of truth cho trạng thái hạ tầng thực tế.
 
 ## 10. Persistence, concurrency và recovery
 
@@ -555,15 +617,17 @@ flowchart TD
 | Management | `workflow_plans` | immutable compiled JSON, hash, action contract manifest |
 | Management | `route_rules` | method/path, execution type, workflow binding, policy chain |
 | Management | `placement_policies` | cấu hình và trạng thái publish |
-| Execution | `jobs` | workflow/plan reference, input snapshot, status, idempotency key, lease |
+| Execution | `jobs` | internal durable operation: workflow/plan, request fingerprint, status, idempotency key, response milestone, lease |
 | Execution | `step_runs` | step status, attempts, input/output, dependencies |
-| Execution | `external_tasks` | Proxmox UPID, task node, reconciliation state |
+| Execution | `external_tasks` | UPID thật của Proxmox, task node, upstream response metadata, reconciliation state |
 | Resource | `vm_inventory` | vmid, node, lab, owner, allocated resources |
 | Resource | `resource_reservations` | job, node/datastore, amounts, state |
 | Resource | `node_capacity` | capacity snapshot/allocatable limits |
 | Audit | `audit_events` | actor, action, target, correlation ID, result |
 
 `workflow_plans` sử dụng **plan_id/hash** để giữ immutable snapshot, **không ép người dùng quản lý semantic version**. Không xóa plan khi còn Job tham chiếu.
+
+Đối với create/clone endpoint workflow, `jobs` là internal operation record nối request → reservation → selected node → VMID → UPID → terminal result. Client không bắt buộc nhận hoặc polling `job_id`; public response vẫn theo contract UPID của endpoint. Failure metadata nội bộ lưu `failure_origin`, upstream status/body đã sanitize, retry classification, public error code và correlation ID, nhưng không công bố component origin như một phần public error.
 
 ### 10.2. PostgreSQL work queue
 
@@ -587,14 +651,25 @@ COMMIT;
 
 **Quan trọng:** Lease có thể hết hạn do Worker crash; chỉ một process được sở hữu *điều phối* tại một thời điểm, nhưng điều này **không tự bảo đảm external Proxmox side effect được thực hiện đúng một lần**. Cần idempotency + external task reconciliation.
 
-### 10.3. Retry, timeout và crash recovery
+### 10.3. Idempotency cho provision mutation
+
+Ở production, mọi create/clone request phải có `Idempotency-Key`, kể cả khi client đã gửi `vmid`/`newid`:
+
+- Cùng principal, endpoint, key và request fingerprint → trả lại cùng internal operation và cùng response/UPID đã lưu khi có.
+- Cùng key nhưng fingerprint khác → từ chối conflict; không tái sử dụng key cho intent mới.
+- Operation đang `SUBMITTING`, `SUBMITTED` hoặc `RECONCILING` không được POST lại mù quáng.
+- Nếu mất kết nối sau khi submit, phải reconcile bằng VMID/UPID/trạng thái thật trước khi quyết định retry.
+
+Yêu cầu header này là extension admission của Gateway; request compatibility ở đây cam kết giữ method/path/body và operation semantics, không tuyên bố drop-in wire compatibility 100% với mọi Proxmox client.
+
+### 10.4. Retry, timeout và crash recovery
 
 - Các action chỉ đọc thông tin có thể retry khi transient error.
 - `clone/create/migrate/delete` là action có side effect: timeout/connection loss có thể là **unknown outcome**, phải kiểm tra VMID/UPID/operation reference trước khi POST lại.
 - Persist UPID và task node; chờ Proxmox task kết thúc, kiểm tra exit status rồi mới coi step hoàn tất.
 - Step `WAITING` có thể trả worker slot; một background monitor/reconciler đánh thức job tiếp tục.
 - Compensation phải dựa trên trạng thái thực tế; không mặc định xóa VM nếu lỗi xảy ra sau khi clone.
-- Job có thể `QUEUED`, `RUNNING`, `WAITING`, `RECONCILING`, `SUCCEEDED`, `FAILED`, `CANCELLED` (chuyển trạng thái được Engine kiểm soát).
+- Composite job có thể `QUEUED`, `RUNNING`, `WAITING`, `RECONCILING`, `SUCCEEDED`, `FAILED`, `CANCELLED`. Endpoint operation bổ sung response-boundary states như `ADMITTED`, `SUBMITTING`, `SUBMITTED`; mọi chuyển trạng thái do Engine/operation service kiểm soát.
 
 ## 11. API và hợp đồng tích hợp
 
@@ -603,17 +678,62 @@ COMMIT;
 | Route (đề xuất) | Chức năng | Ghi chú |
 |:--|:--|:--|
 | `ANY /api2/json/{path:path}` | Single catch-all Proxmox API | Route rule quyết định proxy/workflow |
-| `POST /api2/json/provision` | Provision VM không cần node | Gateway-specific extension |
+| `POST /api2/json/nodes/{node}/qemu` | Native-scoped create workflow | `{node}=auto` hoặc fixed; cùng response contract UPID |
+| `POST /api2/json/nodes/{source_node}/qemu/{vmid}/clone` | Native-scoped clone workflow | Auto placement chỉ qua body `target=auto` |
+| `GET /api2/json/nodes/{task_node}/tasks/{upid}/status` | Theo dõi Proxmox task | Pass-through/policy interception; client tiếp tục dùng UPID thật |
+| `POST /api2/json/provision` | Composite provisioning | Gateway-specific extension; có thể configure/start/readiness và trả job contract |
 | `POST /api2/json/labs/provision` | Provision multi-VM lab | Gateway-specific extension |
 | `POST /management/workflows` | Save draft | Chỉ admin/workflow author |
 | `POST /management/workflows/{id}/publish` | Validate, compile, activate | Kiểm tra Action availability |
 | `POST /management/workflows/{id}/execute` | Chạy workflow đang active | Cần quyền invoke + tenant scope |
 | `GET /management/actions` | Read-only Action Catalog | Không nhận code người dùng |
-| `GET /jobs/{job_id}` | Job status/result | Website polling hoặc bổ sung webhook |
+| `GET /jobs/{job_id}` | Composite job status/result | Không bắt buộc đối với native-scoped create/clone |
 
-**Response contract:** API pass-through cố gắng giữ status/body phù hợp Proxmox; API override trả **HTTP `202 Accepted` + `job_id`** theo contract riêng, không giả làm Proxmox UPID. Website cần tích hợp rõ hành vi bất đồng bộ này.
+### 11.2. Quy tắc request/response contract
 
-### 11.2. Ví dụ request/response
+- Request compatibility của create/clone giữ method, path, body và operation semantics của Proxmox; `auto` và `Idempotency-Key` là extension được công bố của Gateway.
+- Cùng một endpoint phải có cùng contract cho `AUTO` và `FIXED`; implementation là proxy hay workflow không được làm client nhận hai format khác nhau.
+- Create/clone workflow submit đúng một native operation và trả nguyên status/body response chứa **UPID thật của Proxmox**. Gateway không tạo synthetic UPID.
+- UPID xác nhận task đã được nhận, không xác nhận VM đã tạo thành công. Client polling task status qua Gateway đến terminal state.
+- Internal operation/job tiếp tục tracking và accounting nhưng `job_id` không phải public response bắt buộc của create/clone.
+- Composite orchestration có nhiều task được phép dùng contract riêng `202 Accepted + job_id`; endpoint phải công bố contract này rõ ràng.
+- Pass-through endpoint giữ contract upstream, sau khi đi qua auth/policy/contract adapter tương ứng.
+- Production có thể tự cấp `vmid`/`newid` khi client bỏ trống: ID phải được resolve và persist trước khi submit, gắn với idempotency record, và không được cấp ID mới khi retry cùng intent. Vertical Slice 0 chủ đích yêu cầu client truyền `newid`.
+
+### 11.3. Ví dụ clone tự động chọn target
+
+```http
+POST /api2/json/nodes/pve1/qemu/9000/clone HTTP/1.1
+Authorization: Bearer <gateway-token>
+Idempotency-Key: 8e193ef5-...
+Content-Type: application/x-www-form-urlencoded
+
+newid=101&target=auto&full=1&storage=nas-nfs&name=lab-001-vm-01
+```
+
+Gateway resolve `target=auto`, filter/reserve node và chỉ thay trường này bằng node thật trước khi gọi Proxmox. Success response giữ response của Proxmox, ví dụ:
+
+```json
+{
+  "data": "UPID:pve2:00001234:...:qmclone:101:root@pam:"
+}
+```
+
+Nếu `target=pve2`, Gateway filter đúng `pve2`, không chạy selection và không fallback. Nếu thiếu `target`, Gateway giữ native behavior tại source node và không tự chèn field.
+
+### 11.4. Public error và internal provenance
+
+Client nhìn Gateway + Proxmox như một hệ thống. Public error dùng mã theo ngữ nghĩa endpoint như `INVALID_REQUEST`, `NODE_NOT_ELIGIBLE`, `NO_ELIGIBLE_NODE`, `RESOURCE_CAPACITY_EXCEEDED`, `VM_ID_CONFLICT` hoặc `OPERATION_UNAVAILABLE`; không thêm field yêu cầu client phân biệt lỗi do Gateway hay Proxmox.
+
+Ở nội bộ, operation/audit record vẫn lưu `failure_origin`, upstream status/body đã sanitize, retry classification và correlation ID để debug, metrics và recovery. Lỗi upstream của endpoint bị intercept được map qua cùng endpoint error adapter; format/status chính xác cần được contract-test với Proxmox VE version đang chạy. Lỗi của endpoint pass-through được giữ theo contract upstream.
+
+### 11.5. Idempotency contract
+
+Production bắt buộc client gửi `Idempotency-Key` ổn định cho mỗi create/clone intent, bất kể request đã có `vmid`/`newid`. Retry cùng intent phải dùng lại key cũ; intent mới phải dùng key mới. Vertical Slice 0 chưa hiện thực bảo đảm này và được ghi rõ là không retry-safe.
+
+### 11.6. Ví dụ composite provisioning
+
+Ví dụ dưới đây thuộc Gateway-specific `POST /api2/json/provision`, không phải native-scoped clone endpoint. Vì workflow có thể gồm clone, configure, start và readiness với nhiều UPID, endpoint này trả public job contract:
 
 ```json
 {
@@ -646,7 +766,7 @@ COMMIT;
 }
 ```
 
-Khuyến nghị client gửi header `Idempotency-Key` ổn định cho mỗi intent tạo VM, thay vì tạo key mới khi retry cùng một request.
+Composite mutation cũng phải dùng `Idempotency-Key` ổn định ở production; client polling `/jobs/{job_id}` để biết kết quả của toàn bộ orchestration thay vì coi một UPID con là kết quả cuối.
 
 ## 12. Folder structure cuối cùng
 
@@ -660,7 +780,9 @@ proxmox-gateway/
 │   │   ├── route_matcher.py             # Dynamic route rules
 │   │   ├── policy_pipeline.py           # Request/response policies
 │   │   ├── proxy_executor.py            # Proxmox pass-through
-│   │   ├── job_service.py               # Submit jobs; pin immutable plan
+│   │   ├── operation_service.py         # Admission, internal operation, response milestone
+│   │   ├── response_adapter.py          # Stable endpoint response/error contract
+│   │   ├── job_service.py               # Composite job submission/status
 │   │   └── management/                  # Admin Workflow/Policy management API
 │   │       ├── workflows.py
 │   │       ├── placement_policies.py
@@ -734,6 +856,8 @@ proxmox-gateway/
 │
 ├── definitions/                         # Seed/example definitions only
 │   ├── workflows/
+│   │   ├── qemu-create.yaml
+│   │   ├── qemu-clone.yaml
 │   │   ├── vm-provision.yaml
 │   │   ├── vm-migrate.yaml
 │   │   └── lab-provision.yaml
@@ -748,6 +872,7 @@ proxmox-gateway/
 │   ├── concurrency/
 │   └── e2e/
 ├── docs/                                # Detailed specifications / ADRs
+│   └── vertical-slice-0.md              # Clone-only feasibility slice
 ├── .env.example
 ├── pyproject.toml
 ├── Dockerfile
@@ -784,8 +909,8 @@ proxmox-gateway/
 **Gateway startup** (FastAPI lifespan):
 
 1. Init DB connections, security, Proxmox HTTP client.
-2. Discover Action contracts từ installed/trusted packages.
-3. Load route management services, compiler và Workflow Store.
+2. Discover Action contracts và implementation được phép chạy trong endpoint admission từ installed/trusted packages.
+3. Load route management services, admission executor, response adapters, compiler và Workflow Store.
 4. Kiểm tra readiness; **không cần compile lại toàn bộ active workflow từ file mỗi lần startup**.
 
 **Worker startup** (`python -m app.runtimes.worker`):
@@ -795,13 +920,15 @@ proxmox-gateway/
 3. Khởi tạo DAG Engine dùng Action Registry.
 4. Start job claim loop, renew leases và phục hồi những job có thể tiếp quản.
 
-**Runtime workflow publish:** Management API nhận YAML/JSON → compile bằng local Action contracts → validate availability ở worker deployment → persist plan → atomic activate. Job mới tham chiếu active plan; job cũ giữ plan cũ.
+**Runtime workflow publish:** Management API nhận YAML/JSON → compile bằng local Action contracts → validate availability ở Gateway/Worker deployment tương ứng → persist plan → atomic activate. Endpoint operation hoặc composite job mới pin active plan; operation/job cũ giữ plan cũ.
 
 **Runtime policy publish:** Management API validate policy → persist/activate → job mới lấy policy mới hoặc snapshot tương ứng. Không hot-load Python class từ người dùng.
 
 ### 13.3. Môi trường triển khai Proxmox mẫu
 
 Một cụm dev/test có thể gồm `pve1`, `pve2`, `pve3`, network VXLAN/SDN như `vnet20`, và shared NFS storage như `nas-nfs`. Các tên này là **ví dụ cấu hình**, không phải giá trị hardcode trong framework. Các cluster khác được khai báo qua environment và metadata.
+
+Môi trường xác thực đầu tiên dùng Proxmox VE 9, ba node và `nas-nfs`; chi tiết cùng các giới hạn chỉ thuộc thử nghiệm được ghi tại [`docs/vertical-slice-0.md`](docs/vertical-slice-0.md), không khóa cấu hình production.
 
 Các biến nhạy cảm (Proxmox token, DB password, Guacamole credentials) phải truyền qua secret/env management, **không commit vào repository hay file workflow**.
 
@@ -810,11 +937,13 @@ Các biến nhạy cảm (Proxmox token, DB password, Guacamole credentials) ph�
 ### 14.1. Bảo mật
 
 - Chỉ người có quyền Workflow Admin mới publish workflow hoặc route override có side effect.
+- Client xác thực bằng identity/token do Gateway tin cậy. Gateway không forward credential Proxmox của client mà inject service credential riêng khi gọi upstream.
 - Người thực thi workflow phải có **invoke permission** và quyền với VM/cluster/tenant tương ứng.
 - Action Catalog công bố metadata/schemas nhưng không cho upload executable code.
 - `proxmox.request` phải dùng allowlist method/path, scope quyền và kiểm tra tenant; chặn endpoint quản trị ngoài phạm vi.
 - Không cho workflow gọi Python eval, shell tùy ý hoặc URL do người dùng tùy chọn (tránh SSRF/credential abuse).
 - Tách quyền Proxmox của Gateway/Worker theo nguyên tắc least privilege; ghi audit log đối với mutation.
+- Root Proxmox token chỉ được chấp nhận trong dev feasibility slice; production phải thay bằng service token được giới hạn quyền.
 - Bảo vệ dữ liệu input/output của job vì có thể chứa IP, usernames và cấu hình hạ tầng; không lưu secrets trong logs.
 
 ### 14.2. Quan sát hệ thống
@@ -827,6 +956,7 @@ Các metric/log cần ưu tiên:
 - Resource reservation count, available capacity và allocation drift.
 - Worker lease expiration / recovery count.
 - Correlation ID nối HTTP request → Job → Step → Proxmox task UPID.
+- Internal error telemetry phân loại validation, placement, database, network và Proxmox upstream; phân loại này không trở thành public API contract.
 
 ### 14.3. Chiến lược kiểm thử
 
@@ -835,11 +965,21 @@ Các metric/log cần ưu tiên:
 3. **Integration:** Gateway–PostgreSQL, Worker–PostgreSQL, Proxmox mock adapter.
 4. **Concurrency:** nhiều Worker claim job; nhiều placement request đồng thời; không vượt reservation limit.
 5. **Failure injection:** HTTP timeout sau Proxmox POST, worker crash sau khi nhận UPID, DB restart, task thất bại.
-6. **E2E:** provision VM, migrate, lab nhiều VM, readiness, website hiển thị trạng thái.
+6. **Compatibility:** auto/fixed create cùng contract; clone thiếu/fixed/auto target; fixed filter failure không fallback; polling UPID qua Gateway.
+7. **Idempotency:** replay cùng key/fingerprint, conflict khi đổi body và unknown-outcome reconciliation.
+8. **E2E:** provision VM, migrate, lab nhiều VM, readiness, website hiển thị trạng thái.
 
 ## 15. Lộ trình triển khai và tiêu chí nghiệm thu
 
-### 15.1. Giai đoạn 1 — Framework foundation
+### 15.1. Vertical Slice 0 — QEMU clone feasibility
+
+Triển khai một lát cắt clone-only trên cluster dev trước khi tổng quát hóa framework. Slice xác minh fixed/auto target, hard filter CPU/RAM/storage, round-robin, reservation, submit clone, trả UPID thật và basic task tracking. Nó chủ đích chưa có idempotency, retry, crash recovery, multi-tenant hay generic DAG engine.
+
+Phạm vi, giả định, thứ tự triển khai và acceptance criteria nằm tại [`docs/vertical-slice-0.md`](docs/vertical-slice-0.md).
+
+**Hoàn thành khi:** clone với target thiếu/fixed/auto giữ đúng semantics, trả cùng Proxmox UPID contract, client polling task qua Gateway được và happy-path reservation chuyển thành allocation khi clone thành công.
+
+### 15.2. Giai đoạn 1 — Framework foundation
 
 - [ ] Định nghĩa Action Contract, local Action Registry, trusted discovery.
 - [ ] Workflow DSL + Compiler: schema, dependencies, input/output binding, security checks.
@@ -848,7 +988,7 @@ Các metric/log cần ưu tiên:
 
 **Hoàn thành khi:** tạo workflow YAML mới từ Action có sẵn qua API, publish và chạy mà không restart Worker.
 
-### 15.2. Giai đoạn 2 — Durable execution
+### 15.3. Giai đoạn 2 — Durable execution
 
 - [ ] PostgreSQL queue, atomic claim, lease, heartbeat, backoff.
 - [ ] DAG Engine, Action Runner, step persistence, resume.
@@ -857,16 +997,16 @@ Các metric/log cần ưu tiên:
 
 **Hoàn thành khi:** Worker crash rồi restart vẫn resume job, không tạo VM trùng do retry.
 
-### 15.3. Giai đoạn 3 — Resource scheduling
+### 15.4. Giai đoạn 3 — Resource scheduling
 
 - [ ] Resource collector, accounting, hard filtering và strategy scoring.
 - [ ] Atomic reservation + VM inventory.
 - [ ] Policy Editor hoặc Management API cho weighted scoring/constraints.
-- [ ] Workflow `vm.provision` không yêu cầu hardcode node.
+- [ ] Workflow `qemu.create` và `qemu.clone` hỗ trợ `AUTO`/`FIXED` đúng endpoint contract, không yêu cầu hardcode target khi dùng auto.
 
 **Hoàn thành khi:** nhiều request đồng thời được phân phối có kiểm soát tới các node phù hợp, không vượt limit nội bộ.
 
-### 15.4. Giai đoạn 4 — Extensibility validation
+### 15.5. Giai đoạn 4 — Extensibility validation
 
 - [ ] Workflow migration dùng lại placement và task tracking.
 - [ ] Multi-VM lab: group reservation, bounded parallel, partial failure.
@@ -879,7 +1019,13 @@ Các metric/log cần ưu tiên:
 
 | Vấn đề | Quyết định hiện tại / lưu ý |
 |:--|:--|
-| API tương thích Proxmox | Pass-through giữ response gốc khi khả thi; override dùng job contract riêng |
+| API tương thích Proxmox | Giữ request + behavioral compatibility theo endpoint; create/clone workflow trả UPID thật, composite orchestration mới dùng job contract riêng |
+| Auto/fixed placement | Create dùng `{node}=auto`; clone dùng body `target=auto`; node cụ thể luôn được filter nhưng không bị fallback |
+| Operation boundary | Create/clone chỉ thực hiện operation tương ứng; configure/start/readiness thuộc workflow khác |
+| Internal operation | Persist job/operation để accounting và recovery; `job_id` không phải public contract bắt buộc của create/clone |
+| Public error | Một contract theo ngữ nghĩa endpoint, không lộ component origin; provenance upstream/Gateway chỉ lưu nội bộ |
+| Idempotency | Production bắt buộc `Idempotency-Key` cho mọi create/clone; Vertical Slice 0 chủ đích chưa retry-safe |
+| Authentication | Client dùng Gateway identity/token; Gateway dùng Proxmox service credential riêng |
 | Dynamic Action | Không hỗ trợ executable code upload qua UI trong baseline |
 | Action compatibility | Dùng contract hash/deployment compatibility check; không bắt semantic version |
 | Policy snapshot | Pin policy đã resolve để bảo toàn hành vi của job |
@@ -901,4 +1047,4 @@ Các metric/log cần ưu tiên:
 
 ---
 
-**Tóm tắt một câu:** *Proxmox Gateway là một control plane mở rộng: Gateway chọn proxy hoặc workflow; workflow được người dùng publish động vào PostgreSQL; Worker dùng DAG Engine thực thi compiled plan qua những Action/Capability được đăng ký từ code đã deploy; Resource Scheduling là một capability có policy cấu hình động và reservation an toàn dưới cạnh tranh.*
+**Tóm tắt một câu:** *Proxmox Gateway là một control plane mở rộng: Gateway giữ contract theo endpoint, đưa create/clone qua workflow tương thích hành vi để filter/reserve và trả UPID thật, proxy các endpoint không custom, dùng public job contract cho composite orchestration, và tiến tới workflow/policy động cùng durable execution an toàn dưới cạnh tranh.*
