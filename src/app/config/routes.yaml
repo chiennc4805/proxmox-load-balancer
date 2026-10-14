@@ -1,0 +1,14 @@
+version: 1
+
+routes:
+  - id: vm.clone
+    endpoint: /nodes/{node}/qemu/{vmid}/clone
+    method: POST
+    workflow: vm.clone
+
+  # - id: vm.create
+  #   endpoint: /nodes/{node}/qemu
+  #   method: POST
+  #   workflow: qemu.create
+
+

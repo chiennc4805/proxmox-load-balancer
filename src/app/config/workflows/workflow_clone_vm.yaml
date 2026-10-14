@@ -1,0 +1,32 @@
+name: vm.create
+mode: sync
+
+steps:
+  - id: placement
+    uses: app.actions.placement.ResolvePlacement
+    with:
+      node: "${request.path.node}"
+      requirements: "${request.body}"
+
+  - id: admission
+    uses: app.actions.resources.ReserveResources
+    needs: [placement]
+    with:
+      node: "${steps.placement.output.node}"
+      requirements: "${request.body}"
+
+  - id: create
+    uses: app.actions.proxmox.CreateVM
+    needs: [admission]
+    with:
+      node: "${steps.placement.output.node}"
+      config: "${request.body}"
+
+  - id: track
+    uses: app.actions.proxmox.TrackTask
+    needs: [create]
+    with:
+      task: "${steps.create.output}"
+
+response:
+  from: "${steps.create.output}"
