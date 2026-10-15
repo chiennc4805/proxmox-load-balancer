@@ -18,6 +18,11 @@ class Settings:
     pve_token_value: str = field(repr=False)
     pve_verify_ssl: bool
     pve_request_timeout_seconds: float
+    database_dsn: str | None = field(default=None, repr=False)
+    cluster_key: str = 'dev'
+    shared_storage: str = 'nas-nfs'
+    tracker_interval_seconds: float = 3.0
+    tracker_concurrency: int = 4
 
     @property
     def pve_api_base_url(self) -> str:
@@ -65,6 +70,11 @@ def get_settings() -> Settings:
         pve_token_value=_required_environment('PVE_TOKEN_VALUE'),
         pve_verify_ssl=_boolean_environment('PVE_VERIFY_SSL', default=True),
         pve_request_timeout_seconds=timeout,
+        database_dsn=os.getenv('DATABASE_DSN') or None,
+        cluster_key=os.getenv('CLUSTER_KEY', 'dev'),
+        shared_storage=os.getenv('SHARED_STORAGE', 'nas-nfs'),
+        tracker_interval_seconds=float(os.getenv('TRACKER_INTERVAL_SECONDS', '3')),
+        tracker_concurrency=int(os.getenv('TRACKER_CONCURRENCY', '4')),
     )
 
 

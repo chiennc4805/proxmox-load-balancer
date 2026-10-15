@@ -3,13 +3,15 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.framework.contracts.action import WorkflowError
 from app.framework.contracts.proxmox import ProxmoxTimeoutError, ProxmoxTransportError
 from app.framework.contracts.request import EndpointRequest
 from app.framework.contracts.route import RouteMatch
-from app.framework.workflows.default_proxy import DefaultProxyWorkflow
+from app.framework.workflows.loader import load_workflow
 from app.gateway.response_adapter import to_http_response
-from app.gateway.route_matcher import DEFAULT_PROXY_WORKFLOW, RouteMatcher
+from app.gateway.route_matcher import RouteMatcher
 from app.infrastructure.config.route_loader import read_routes
+from app.infrastructure.database.operations import OperationStore
 from app.infrastructure.proxmox.client import ProxmoxClient
 from app.settings import get_settings
 
@@ -79,27 +81,17 @@ async def handle_proxmox_request(
         path_params=dict(matched_route.path_params),
     )
 
-    # Tại đây đã có đủ dữ liệu cho bước tiếp theo:
-    #   matched_route.workflow  -> workflow cần thực thi
-    #   endpoint_request        -> method/path/query/headers/body/path params
-    #
-    if matched_route.workflow == DEFAULT_PROXY_WORKFLOW:
-        workflow = DefaultProxyWorkflow(proxmox=proxmox)
-        try:
-            upstream_response = await workflow.execute(endpoint_request)
-        except ProxmoxTimeoutError as error:
-            raise HTTPException(
-                status_code=504,
-                detail='The upstream response could not be completed',
-            ) from error
-        except ProxmoxTransportError as error:
-            raise HTTPException(
-                status_code=502,
-                detail='The request could not be completed',
-            ) from error
-
-        return to_http_response(upstream_response, request.method)
-
-    # TODO: Giao custom matched_route.workflow và endpoint_request cho
-    # OperationService. Phần thực thi custom workflow chưa thuộc phạm vi hiện tại.
-    return None
+    # Controller does not distinguish clone or native/adhoc actions. Both
+    # the default proxy and YAML workflows share the workflow contract.
+    try:
+        settings = get_settings()
+        operations = OperationStore(settings.database_dsn, settings.cluster_key)
+        workflow = load_workflow(matched_route.workflow, proxmox, settings, operations)
+        upstream_response = await workflow.execute(endpoint_request)
+    except WorkflowError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except ProxmoxTimeoutError as error:
+        raise HTTPException(status_code=504, detail='The upstream response could not be completed') from error
+    except ProxmoxTransportError as error:
+        raise HTTPException(status_code=502, detail='The request could not be completed') from error
+    return to_http_response(upstream_response, request.method)

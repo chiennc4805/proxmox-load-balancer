@@ -112,7 +112,7 @@ Gateway mở rộng đúng vị trí vốn biểu diễn **target placement** m�
 | Error boundary | **Public error theo ngữ nghĩa endpoint; provenance chỉ lưu nội bộ** | Client nhìn thấy một hệ thống, vận hành vẫn phân biệt nguồn lỗi để chẩn đoán/recovery |
 | Workflow | **YAML/JSON DSL, runtime publish vào PostgreSQL** | Tạo workflow mà không restart worker |
 | Workflow store | **PostgreSQL** | Lưu definition, compiled plan, trạng thái active |
-| Action Registry | **In-memory, trong từng process cần dùng** | Tên Action ánh xạ tới contract và Python implementation |
+| Action Resolver | **Native descriptor + trusted custom class import** | Chung Action Contract, không đăng ký từng endpoint Proxmox |
 | Action discovery | **Startup qua trusted Python packages** | Có thể bổ sung capability mà không sửa core framework |
 | Action Catalog UI | **Chỉ đọc metadata / schema** | Không mở thực thi code tùy ý cho người dùng |
 | Scheduling | **Capability `placement`** với Policy/Strategy | Không hardcode scheduler trong Engine hoặc Workflow |
@@ -161,7 +161,7 @@ flowchart TB
         ENGINE[DAG Execution Engine]
         CONTEXT[Context + Dependency Resolver]
         RUNNER[Action Runner]
-        REG[Local Action Registry]
+        REG[Trusted Action Resolver]
         CAP[Domain Capabilities]
         CONSUMER --> ENGINE --> CONTEXT --> RUNNER --> REG --> CAP
     end
@@ -259,7 +259,7 @@ Không compile tùy ý khi Worker nhận mỗi job. **Compile lúc publish**; Wo
 
 - **Worker** là process chạy vòng lặp claim job, gia hạn lease, giới hạn concurrency, quản lý shutdown/health.
 - **DAG Engine** là Python object/module bên trong Worker, lựa chọn step đủ dependencies, binding input, gọi Action Runner và persist step state.
-- **Action Runner** resolve `uses` qua Local Action Registry và thực thi đúng Action Contract.
+- **Action Runner** resolve `uses` qua trusted Action Resolver và thực thi đúng Action Contract.
 - **Checkpoint/Recovery** lưu bước đã thành công, trạng thái tác vụ ngoài, retry schedule và lỗi.
 - **External Task Tracking** tiếp tục theo dõi Proxmox UPID sau khi HTTP response đã trả; tác vụ lâu có thể chuyển sang `WAITING` để nhường slot.
 
@@ -270,33 +270,24 @@ flowchart TD
     LOAD --> DAG[DAG ready-step selector]
     DAG --> BIND[Resolve inputs]
     BIND --> RUN[Action Runner]
-    RUN --> REG[Local Action Registry]
+    RUN --> REG[Trusted Action Resolver]
     REG --> ACTION[Execute capability]
     ACTION --> SAVE[Persist output / state]
     SAVE --> DAG
 ```
 
-### 5.4. Action Registry — không phải Action Builder
+### 5.4. Action Resolver và Catalog
 
-Action Registry đơn giản là **mapping trong RAM của mỗi process** từ tên Action đến implementation Python được deploy và contract của nó:
+Mọi Action có chung contract `execute(args, context) -> ActionResult`. Resolver chỉ quyết định implementation; Engine gọi cùng một entry point cho native và adhoc.
 
-```python
-{
-    "proxmox.request": ProxmoxRequestAction,
-    "placement.reserve": ReservePlacementAction,
-    "placement.commit": CommitPlacementAction,
-    "proxmox.task.wait": WaitProxmoxTaskAction,
-    "guest.wait_ready": GuestReadyAction,
-}
-```
+- `proxmox.native.nodes(${...}).qemu(${...}).clone.post`: parse resource chain thành descriptor cho một `ProxmoxNativeAction` tổng quát. Không tạo class/file cho từng API endpoint.
+- `adhoc.clone.PrepareClone`: import class `PrepareClone` từ trusted namespace `app.actions.clone`, kiểm tra Action Contract rồi tạo instance.
+- Không bắt buộc decorator, registration function hoặc mapping đăng ký từng Action. Có thể cache implementation/compiled descriptor trong process.
+- Compiler/loader kiểm tra action availability, references và namespace trước execution; người dùng không nhập Python code qua UI.
+- Action nhận dependencies qua context/constructor. Proxmox adapter dùng chung giữ HTTP, service token, TLS, timeout; adapter không phụ thuộc FastAPI.
+- Workflow/Action trả kết quả dữ liệu. HTTP response/error mapping nằm ở Gateway response boundary.
 
-- **Lưu ở đâu?** Python source/package trong image; mapping tạo lại trong RAM khi process khởi động.
-- **Đăng ký khi nào?** Bootstrap tự import các module Action trong trusted packages; decorator/registration function đưa class vào mapping.
-- **Ai cần nó?** Compiler ở Gateway cần **contracts**; Gateway admission executor cần implementation của các response-critical Action được allowlist; Worker cần contracts và implementation cho durable continuation/composite workflows.
-- **Workflow mới có tạo Action mới không?** Không. Workflow chỉ tham chiếu Action đã có; người dùng không tạo Action code trên UI.
-- **Action mới hoàn toàn?** Developer viết plugin Python và deploy worker/gateway có hỗ trợ. Có thể thêm mô hình external plugin executor về sau, không thuộc baseline.
-
-Có thể cung cấp API **read-only Action Catalog** để Workflow Builder hiển thị tên, mô tả, input/output schema. Không cần một Action Registry server riêng hoặc DB chứa Python classes.
+Production vẫn có thể cung cấp read-only Action Catalog để hiển thị metadata/schema/permissions của các implementation được phép. Catalog không yêu cầu mirror mọi endpoint Proxmox thành Python classes hay một registry server riêng.
 
 ### 5.5. Domain Capabilities
 
@@ -313,18 +304,19 @@ Có thể cung cấp API **read-only Action Catalog** để Workflow Builder hi�
 
 ## 6. Vòng đời Action, Workflow và Policy
 
-### 6.1. Action: từ source code đến Registry
+### 6.1. Action: từ source code tới implementation
 
 ```mermaid
 flowchart LR
-    CODE[Developer viết Action Python] --> DEPLOY[Build / Deploy image]
-    DEPLOY --> BOOT[Gateway / Worker startup]
-    BOOT --> DISCOVER[Discover trusted Action modules]
-    DISCOVER --> REG[Local Action Registry]
-    REG --> USE[Compiler / Action Runner]
+    YAML[Workflow uses + args] --> RESOLVE[Trusted Action Resolver]
+    RESOLVE --> NATIVE[One generic Proxmox native implementation]
+    RESOLVE --> ADHOC[Import custom Python class]
+    NATIVE --> CONTRACT[Common execute args + context contract]
+    ADHOC --> CONTRACT
+    CONTRACT --> ENGINE[Action Runner]
 ```
 
-`bootstrap()` **không phải container riêng**. Entry point `gateway` và `worker` gọi bootstrap khi startup. Action mới viết sau thời điểm startup chỉ có hiệu lực khi code được deploy và process được restart/rolling restart.
+Thêm native endpoint chỉ thay resource chain và arguments trong workflow; developer không phải thêm file Action. Thêm nghiệp vụ custom cần implementation trong trusted package rồi deploy code. Production publish validation phải kiểm tra implementation và permissions được hỗ trợ trên runtime sẽ chạy plan.
 
 ### 6.2. Workflow: người dùng publish ngay khi runtime
 
@@ -452,66 +444,37 @@ Clone, create, migrate, snapshot hoặc delete có thể chia sẻ Action theo c
 
 ## 8. Workflow DSL và Action Contract
 
-### 8.1. Ví dụ endpoint workflow cho clone (minh họa)
+### 8.1. Ví dụ endpoint workflow cho clone
+
+Bản tuần tự hiện tại nằm ở [workflow_clone_vm.yaml](src/app/config/workflows/workflow_clone_vm.yaml):
 
 ```yaml
-name: qemu.clone
-mode: endpoint
-input_schema: proxmox.qemu.clone.request
-response_contract: proxmox.upid
-response_milestone: clone_submitted
+name: vm.clone
+mode: sync
 
 steps:
-  - id: source
-    uses: proxmox.vm.resolve_source
-    with:
-      node: "${path.source_node}"
-      vmid: "${path.vmid}"
+  - id: prepare
+    uses: adhoc.clone.PrepareClone
+    args:
+      request: "${request}"
 
-  - id: placement
-    uses: placement.resolve_and_reserve
-    needs: [source]
-    with:
-      # target=auto -> AUTO; target=<node> -> FIXED(node);
-      # omitted target -> FIXED(path.source_node)
-      requested_target: "${input.target}"
-      default_target: "${path.source_node}"
-      resources: "${steps.source.output.resources}"
+  - id: clone
+    uses: "proxmox.native.nodes(${steps.prepare.output.source_node}).qemu(${steps.prepare.output.source_vmid}).clone.post"
+    args: "${steps.prepare.output.clone_params}"
 
-  - id: clone_submitted
-    uses: proxmox.vm.clone
-    needs: [placement]
-    with:
-      original_request: "${input}"
-      source_node: "${path.source_node}"
-      source_vmid: "${path.vmid}"
-      resolved_target: "${steps.placement.output.node}"
-      reservation_id: "${steps.placement.output.reservation_id}"
-
-continuation:
-  - id: clone_done
-    uses: proxmox.task.wait
-    needs: [clone_submitted]
-    with:
-      task_node: "${steps.clone_submitted.output.task_node}"
-      upid: "${steps.clone_submitted.output.upid}"
-
-  - id: commit
-    uses: placement.commit
-    needs: [clone_done]
-    with:
-      reservation_id: "${steps.placement.output.reservation_id}"
-
-on_failure:
-  uses: placement.release_or_reconcile
+  - id: record
+    uses: adhoc.operations.RecordSubmission
+    args:
+      operation_id: "${steps.prepare.output.operation_id}"
+      upstream_response: "${steps.clone.output}"
 
 response:
-  from: "${steps.clone_submitted.output.proxmox_response}"
+  from: "${steps.clone.output}"
 ```
 
-`response_milestone` cho phép Gateway trả response chứa UPID thật ngay sau khi Proxmox chấp nhận clone, trong khi durable continuation vẫn theo dõi task để commit/release tài nguyên. Workflow này **không** configure, start hay chờ guest readiness. Những bước đó thuộc composite orchestration riêng và có thể dùng public job contract.
+`sync` mô tả admission/submit trong HTTP request; task Proxmox vẫn bất đồng bộ. Response chỉ trả sau khi step `record` đã persist UPID, nhưng status/headers/body lấy từ native clone response. Background tracker xử lý terminal status/accounting. Không configure, start hay chờ guest readiness.
 
-> 💡 Cấu trúc DSL trên là thiết kế production đề xuất, chưa phải syntax đã được parser/runtime hiện thực. Expression và binding phải sandboxed; không dùng Python `eval()`.
+Production có thể bổ sung `needs`, branching, response milestone và durable continuation trong cùng kiến trúc Action/Plan; Slice 0 hiện chỉ chạy tuần tự, không claim đã có durable DAG runtime. Management publish, plan snapshots và recovery vẫn là mục tiêu production trong các phần sau.
 
 ### 8.2. Action Contract
 
@@ -526,17 +489,18 @@ Action công bố tối thiểu:
 | `side_effect` | Action có thay đổi trạng thái bên ngoài hay không |
 | `retry_policy` | Khi nào được retry an toàn |
 | `reconcile` | Cách xác định kết quả của operation chưa rõ trạng thái |
-| `execute(context, inputs)` | Entry point duy nhất Engine gọi |
+| `execute(args, context)` | Entry point duy nhất Engine gọi |
 
 ```python
 from typing import Protocol
+from app.framework.contracts.action import ActionResult
 
 class Action(Protocol):
     name: str
     input_schema: type
     output_schema: type
 
-    async def execute(self, context, inputs: dict) -> dict:
+    async def execute(self, args: object, context) -> ActionResult:
         ...
 ```
 
@@ -801,8 +765,8 @@ proxmox-gateway/
 │   │   │   ├── dag_validator.py
 │   │   │   ├── contract_checker.py
 │   │   │   └── plan_builder.py
-│   │   ├── registry/
-│   │   │   ├── action_registry.py         # In-process Action mapping
+│   │   ├── actions/
+│   │   │   ├── loader.py                  # Trusted implementation resolver
 │   │   │   └── workflow_store.py          # PostgreSQL workflow/plans repository
 │   │   └── engine/
 │   │       ├── executor.py                # Execute pinned plan
@@ -882,7 +846,7 @@ proxmox-gateway/
 
 ### 12.1. Tại sao cấu trúc như vậy?
 
-- `framework/` giữ các abstraction tổng quát: compiler, contracts, engine, registry.
+- `framework/` giữ các abstraction tổng quát: compiler, contracts, engine, action resolver.
 - `capabilities/` giữ các logic nghiệp vụ; scheduling chỉ là **placement capability**, không ngang hàng với framework.
 - `gateway/` chỉ xử lý HTTP, auth, route và submission; không chứa scheduling algorithm.
 - `infrastructure/` giữ adapter database và Proxmox API để business layer không phụ thuộc HTTP chi tiết.
@@ -916,8 +880,8 @@ proxmox-gateway/
 **Worker startup** (`python -m app.runtimes.worker`):
 
 1. Init DB, Proxmox client và dependencies.
-2. Discover Action implementations vào local registry.
-3. Khởi tạo DAG Engine dùng Action Registry.
+2. Khởi tạo trusted Action Resolver và kiểm tra implementation đang được tham chiếu.
+3. Khởi tạo DAG Engine dùng chung Action Contract.
 4. Start job claim loop, renew leases và phục hồi những job có thể tiếp quản.
 
 **Runtime workflow publish:** Management API nhận YAML/JSON → compile bằng local Action contracts → validate availability ở Gateway/Worker deployment tương ứng → persist plan → atomic activate. Endpoint operation hoặc composite job mới pin active plan; operation/job cũ giữ plan cũ.
@@ -981,7 +945,7 @@ Phạm vi, giả định, thứ tự triển khai và acceptance criteria nằm 
 
 ### 15.2. Giai đoạn 1 — Framework foundation
 
-- [ ] Định nghĩa Action Contract, local Action Registry, trusted discovery.
+- [ ] Định nghĩa Action Contract, trusted Action Resolver và metadata discovery.
 - [ ] Workflow DSL + Compiler: schema, dependencies, input/output binding, security checks.
 - [ ] Workflow Management API: draft, publish, activate, list, execute.
 - [ ] PostgreSQL schema cho workflows/plans/jobs/steps.

@@ -1,32 +1,21 @@
-name: vm.create
+name: vm.clone
 mode: sync
 
 steps:
-  - id: placement
-    uses: app.actions.placement.ResolvePlacement
-    with:
-      node: "${request.path.node}"
-      requirements: "${request.body}"
+  - id: prepare
+    uses: adhoc.clone.PrepareClone
+    args:
+      request: "${request}"
 
-  - id: admission
-    uses: app.actions.resources.ReserveResources
-    needs: [placement]
-    with:
-      node: "${steps.placement.output.node}"
-      requirements: "${request.body}"
+  - id: clone
+    uses: "proxmox.native.nodes(${steps.prepare.output.source_node}).qemu(${steps.prepare.output.source_vmid}).clone.post"
+    args: "${steps.prepare.output.clone_params}"
 
-  - id: create
-    uses: app.actions.proxmox.CreateVM
-    needs: [admission]
-    with:
-      node: "${steps.placement.output.node}"
-      config: "${request.body}"
-
-  - id: track
-    uses: app.actions.proxmox.TrackTask
-    needs: [create]
-    with:
-      task: "${steps.create.output}"
+  - id: record
+    uses: adhoc.operations.RecordSubmission
+    args:
+      operation_id: "${steps.prepare.output.operation_id}"
+      upstream_response: "${steps.clone.output}"
 
 response:
-  from: "${steps.create.output}"
+  from: "${steps.clone.output}"

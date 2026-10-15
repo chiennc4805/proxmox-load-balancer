@@ -21,11 +21,27 @@ Vertical Slice 0 phải chứng minh end-to-end rằng Gateway có thể:
 
 Slice 0 không nhằm chứng minh idempotency, retry, unknown-outcome recovery hay crash takeover.
 
+### Kết quả xác thực ngày 2026-10-15
+
+- PostgreSQL, Gateway và tracker chạy bằng Docker Compose trên máy dev.
+- 34 kiểm thử pass trên Windows/Python 3.10 và image Linux/Python 3.12; DB tests chạy với PostgreSQL thật và Proxmox giả lập.
+- Kiểm thử 40 request đồng thời xác nhận không nghẽn executor: chỉ ba clone được submit khi fixture có ba slot CPU.
+- Live E2E dùng template `9001` ở `pve1`, full clone trên `nas-nfs`; mỗi case trả UPID thật, task `OK`, operation `SUCCEEDED`, reservation `CONSUMED`.
+
+| Request | VMID kiểm thử | Node đích | VM status |
+|:--|:--|:--|:--|
+| Thiếu `target` | 101 | pve1 | stopped |
+| `target=pve2` | 102 | pve2 | stopped |
+| `target=auto` | 103 | pve1 | stopped |
+
+Ba VM kiểm thử được giữ lại. Live E2E xác thực ba semantics tuần tự; concurrency đã kiểm chứng bằng PostgreSQL thật/Proxmox giả lập, chưa claim đã load-test nhiều clone đồng thời trên cluster thật. Các acceptance item khác, đặc biệt Gateway authentication, vẫn cần hoàn thiện.
+
 ## 2. Quan hệ với kiến trúc production
 
 - README là nguồn định hướng cho capability và kiến trúc dài hạn.
 - Tài liệu này là nguồn phạm vi cho lần triển khai đầu tiên.
-- Slice 0 hiện thực use case clone theo cách trực tiếp; chưa xây generic DAG Engine hay runtime Workflow DSL.
+- Slice 0 chạy clone qua YAML tuần tự tối thiểu: load/validate/compile, resolve expressions, rồi gọi cùng `Action.execute(args, context)` cho mọi step. Generic DAG Engine và runtime publish vẫn nằm ngoài phạm vi.
+- DSL dùng `args`, native resource chain `proxmox.native.nodes(${...}).qemu(${...}).clone.post`, và custom class import trong namespace `adhoc`. Không tạo file/class riêng cho từng endpoint Proxmox.
 - Tên module và schema tối thiểu trong tài liệu này có thể được refactor khi tổng quát hóa, nhưng endpoint semantics và các invariant đã chốt phải được giữ.
 - Production yêu cầu `Idempotency-Key`, retry/reconciliation an toàn, least-privilege credential, multi-replica recovery và stable error contract; Slice 0 chủ đích chưa đáp ứng các yêu cầu đó.
 
@@ -52,6 +68,7 @@ Slice 0 không nhằm chứng minh idempotency, retry, unknown-outcome recovery 
 
 - Catch-all reverse proxy tối thiểu cho các API cần thiết, bao gồm task status/log.
 - Một custom endpoint workflow: QEMU clone.
+- YAML sequential runtime và execution plan; một Action Contract chung cho native/adhoc.
 - Fixed placement và automatic placement.
 - Filter node online, CPU, RAM và khả năng truy cập/dung lượng `nas-nfs`.
 - CPU overcommit ratio `1.0`.
@@ -66,7 +83,7 @@ Slice 0 không nhằm chứng minh idempotency, retry, unknown-outcome recovery 
 
 - QEMU create.
 - Configure, resize, cloud-init, start hoặc guest readiness sau clone.
-- Generic DAG Engine, Workflow DSL, Workflow Builder và Management API.
+- Generic DAG Engine, durable step execution, runtime Workflow Builder/publish và Management API.
 - Public Job API cho clone.
 - Idempotency enforcement.
 - Automatic retry.
@@ -240,6 +257,10 @@ eligible when requested_storage <= storage_available
 - Nếu eligible set thay đổi, chọn node hợp lệ kế tiếp trong ring hiện tại.
 - FIXED request không thay đổi cursor.
 
+Admission đọc inventory và reservation dưới PostgreSQL transaction-level advisory lock theo cluster. Trong mỗi process, asyncio lock giữ các request đang chờ ngoài threadpool; PostgreSQL vẫn là khóa có hiệu lực giữa các process. Khóa được thả sau khi đã ghi operation/reservation/cursor, trước khi submit clone. Vì vậy admission tuần tự nhưng các task clone đã submit được phép chạy đồng thời.
+
+VM đã xuất hiện trong inventory khi reservation còn `HELD` chỉ được tính qua hold, không tính hai lần. Allocation `CONSUMED` chưa xuất hiện trong inventory được dùng làm fallback CPU/RAM. Trong Slice 0, deletion/migration/resize ngoài luồng clone chưa reconcile allocation fallback; đây là phạm vi cần hoàn thiện trước production.
+
 Round-robin không thay thế hard filter. Nó chỉ chọn giữa những node đã qua toàn bộ eligibility checks.
 
 ## 10. Persistence tối thiểu
@@ -271,8 +292,8 @@ Trường dự kiến:
 State tối thiểu:
 
 ```text
-RECEIVED → RESERVED → SUBMITTED → SUCCEEDED | FAILED
-                         └──────→ UNKNOWN
+RESERVED → SUBMITTING → SUBMITTED → SUCCEEDED | FAILED
+               └──────→ UNKNOWN
 ```
 
 `UNKNOWN` ghi nhận timeout/outcome chưa rõ để operator kiểm tra thủ công; Slice 0 không tự động recovery.
@@ -305,6 +326,8 @@ Tracker poll các operation `SUBMITTED` bằng UPID và task node:
 - Tracker không retry clone, không compensation và không tự giải quyết `UNKNOWN`.
 - Tracker chưa có claim lease, heartbeat hoặc multi-replica takeover.
 
+Tracker là process riêng (`python -m app.tracker`), polling bằng task node lấy từ UPID. `TRACKER_CONCURRENCY` giới hạn số tác vụ polling đồng thời; không phải giới hạn số clone Proxmox có thể chạy. Khi task success, tracker còn kiểm tra VM config trên selected target trước khi consume reservation. Poll timeout giữ nguyên `SUBMITTED/HELD`; terminal failure chuyển `FAILED/RELEASED`.
+
 Dữ liệu được persist để mở đường cho recovery ở slice sau, nhưng restart giữa task chưa phải acceptance guarantee của Slice 0.
 
 ## 12. Authentication và secrets
@@ -329,6 +352,28 @@ Docker Compose tối thiểu:
 - `postgres`: operations, reservations và round-robin cursor.
 
 Không cần Redis hoặc RabbitMQ.
+
+Triển khai hiện tại có [`compose.yaml`](../compose.yaml), gồm một Gateway, một tracker và PostgreSQL 17 với named volume. Chạy bằng:
+
+```powershell
+docker compose --env-file src/app/.env up -d --build
+```
+
+Gateway bind `127.0.0.1:8000`; PostgreSQL bind `127.0.0.1:5433`. Gateway static-token authentication vẫn là TODO trong triển khai hiện tại; chưa mở Gateway ra mạng ngoài. Không dùng `down -v` nếu cần giữ operation/reservation.
+
+Local Python sử dụng `DATABASE_DSN` tới localhost; Compose tự override DSN tới service `postgres`. Gateway/tracker tạo initial schema idempotently khi khởi động. Đây chưa phải cơ chế migration có version cho production.
+
+Kiểm thử:
+
+```powershell
+$env:PYTHONPATH='src;tests'
+$env:RUN_POSTGRES_TESTS='1'
+python -m unittest discover -s tests -v
+```
+
+DB integration tests dùng Proxmox giả lập và cluster key `tests:<uuid>`, chỉ dọn record thuộc chính test đó.
+
+[`scripts/verify_clone_live.py`](../scripts/verify_clone_live.py) mặc định chỉ đọc. `--submit` tạo ba VM stopped từ template `9001` cho các case omitted/fixed/auto, lấy `newid` bằng `/cluster/nextid`, polling task qua Gateway và kiểm tra trạng thái DB. Script không xóa VM; việc tự cấp VMID ở đây thuộc client kiểm thử, không thay đổi yêu cầu `newid` của clone endpoint.
 
 Configuration tối thiểu:
 
