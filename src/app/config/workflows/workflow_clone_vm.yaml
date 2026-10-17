@@ -1,5 +1,4 @@
 name: vm.clone
-mode: sync
 
 steps:
   - id: prepare

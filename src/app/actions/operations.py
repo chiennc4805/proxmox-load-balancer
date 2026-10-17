@@ -1,13 +1,13 @@
 import logging
 import re
 
-from app.framework.contracts.action import Action, ActionResult, WorkflowError
+from app.framework.contracts.action import BaseAction, ActionResult, WorkflowError
 
 
 logger = logging.getLogger(__name__)
 
 
-class RecordSubmission(Action):
+class RecordSubmission(BaseAction):
     async def execute(self, args, context) -> ActionResult:
         response = args['upstream_response']
         operation_id = args['operation_id']

@@ -40,7 +40,7 @@ Ba VM kiểm thử được giữ lại. Live E2E xác thực ba semantics tuầ
 
 - README là nguồn định hướng cho capability và kiến trúc dài hạn.
 - Tài liệu này là nguồn phạm vi cho lần triển khai đầu tiên.
-- Slice 0 chạy clone qua YAML tuần tự tối thiểu: load/validate/compile, resolve expressions, rồi gọi cùng `Action.execute(args, context)` cho mọi step. Generic DAG Engine và runtime publish vẫn nằm ngoài phạm vi.
+- Slice 0 chạy clone qua YAML tuần tự tối thiểu: load/validate/compile, resolve expressions, rồi gọi cùng `BaseAction.execute(args, context)` cho mọi step. Generic DAG Engine và runtime publish vẫn nằm ngoài phạm vi.
 - DSL dùng `args`, native resource chain `proxmox.native.nodes(${...}).qemu(${...}).clone.post`, và custom class import trong namespace `adhoc`. Không tạo file/class riêng cho từng endpoint Proxmox.
 - Tên module và schema tối thiểu trong tài liệu này có thể được refactor khi tổng quát hóa, nhưng endpoint semantics và các invariant đã chốt phải được giữ.
 - Production yêu cầu `Idempotency-Key`, retry/reconciliation an toàn, least-privilege credential, multi-replica recovery và stable error contract; Slice 0 chủ đích chưa đáp ứng các yêu cầu đó.

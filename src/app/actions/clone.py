@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import logging
 
-from app.framework.contracts.action import Action, ActionResult, WorkflowError
+from app.framework.contracts.action import BaseAction, ActionResult, WorkflowError
 from app.framework.contracts.proxmox import NativeArguments
 from app.services.clone import build_clone_arguments, normalize_clone
 from app.services.resources import ResourceCollector, choose_target, eligible_nodes
@@ -19,7 +19,7 @@ class PreparedClone:
     clone_params: NativeArguments
 
 
-class PrepareClone(Action):
+class PrepareClone(BaseAction):
     async def execute(self, args, context) -> ActionResult:
         clone = normalize_clone(args['request'])
         collector = ResourceCollector(context.proxmox, context.settings.shared_storage)

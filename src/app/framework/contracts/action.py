@@ -30,7 +30,7 @@ class ActionContext:
     upstream_response: UpstreamResponse | None = None
 
 
-class Action(ABC):
+class BaseAction(ABC):
     @abstractmethod
     async def execute(self, args: Any, context: ActionContext) -> ActionResult:
         ...

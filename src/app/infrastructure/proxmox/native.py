@@ -4,7 +4,7 @@ import re
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from app.framework.contracts.action import Action, ActionContext, ActionResult, WorkflowError
+from app.framework.contracts.action import BaseAction, ActionContext, ActionResult, WorkflowError
 from app.framework.contracts.proxmox import NativeArguments
 from app.framework.workflows.expressions import EXPRESSION, REFERENCE, resolve
 
@@ -79,7 +79,7 @@ def parse_native_call(uses: str) -> NativeCall:
     raise WorkflowError('Native action is missing its HTTP method', 500)
 
 
-class ProxmoxNativeAction(Action):
+class ProxmoxNativeAction(BaseAction):
     def __init__(self, call: NativeCall):
         self._call = call
 

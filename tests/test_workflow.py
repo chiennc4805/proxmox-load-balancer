@@ -1,8 +1,9 @@
 import asyncio
 from dataclasses import replace
 import json
+from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.framework.actions.loader import load_action
 from app.framework.contracts.action import ActionContext, WorkflowError
@@ -28,11 +29,32 @@ def clone_request(newid=200, target=None, node='pve1'):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_plan_loader_rejects_missing_definition(self):
+        with patch('app.framework.workflows.loader.WORKFLOWS_DIRECTORY') as directory:
+            directory.glob.return_value = []
+            with self.assertRaisesRegex(WorkflowError, 'exactly one definition'):
+                load_plan.__wrapped__('missing')
+
+    def test_plan_loader_rejects_duplicate_definitions(self):
+        definition = '''
+name: duplicate
+steps:
+  - id: native
+    uses: proxmox.native.nodes.get
+response:
+  from: ${steps.native.output}
+'''
+        with patch('app.framework.workflows.loader.WORKFLOWS_DIRECTORY') as directory:
+            directory.glob.return_value = [Path('first.yaml'), Path('second.yaml')]
+            with patch.object(Path, 'read_text', return_value=definition):
+                with self.assertRaisesRegex(WorkflowError, 'exactly one definition'):
+                    load_plan.__wrapped__('duplicate')
+
     def test_plan_loads_native_and_adhoc_into_one_action_contract(self):
-        from app.framework.contracts.action import Action
+        from app.framework.contracts.action import BaseAction
         plan = load_plan('vm.clone')
         self.assertEqual([step.id for step in plan.steps], ['prepare', 'clone', 'record'])
-        self.assertTrue(all(isinstance(step.action, Action) for step in plan.steps))
+        self.assertTrue(all(isinstance(step.action, BaseAction) for step in plan.steps))
         self.assertIsInstance(plan.steps[1].action, ProxmoxNativeAction)
 
     def test_native_parser_keeps_references_symbolic_until_execution(self):
@@ -56,8 +78,23 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(uses=uses), self.assertRaises(WorkflowError):
                 load_action(uses)
 
+    def test_validator_accepts_minimal_sequential_workflow(self):
+        raw = {'name': 'test', 'steps': [
+            {'id': 'one', 'uses': 'proxmox.native.nodes.get', 'args': {}},
+        ], 'response': {'from': '${steps.one.output}'}}
+        definition = validate_workflow(raw)
+        self.assertEqual(definition.name, 'test')
+        self.assertEqual([step.id for step in definition.steps], ['one'])
+        self.assertEqual(definition.response, '${steps.one.output}')
+
+    def test_validator_rejects_missing_empty_or_invalid_steps(self):
+        base = {'name': 'test', 'response': {'from': '${request}'}}
+        for raw in (base, dict(base, steps=[]), dict(base, steps={})):
+            with self.subTest(raw=raw), self.assertRaisesRegex(WorkflowError, 'non-empty sequential steps'):
+                validate_workflow(raw)
+
     def test_validator_rejects_future_steps_and_duplicate_ids(self):
-        raw = {'name': 'test', 'mode': 'sync', 'steps': [
+        raw = {'name': 'test', 'steps': [
             {'id': 'one', 'uses': 'proxmox.native.nodes.get', 'args': '${steps.two.output}'},
         ], 'response': {'from': '${steps.one.output}'}}
         with self.assertRaises(WorkflowError):

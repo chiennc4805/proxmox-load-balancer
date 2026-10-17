@@ -20,8 +20,8 @@ def references(value: Any):
 def validate_workflow(raw: Any) -> WorkflowDefinition:
     if not isinstance(raw, dict) or not isinstance(raw.get('name'), str):
         raise WorkflowError('Workflow must have a name', 500)
-    if raw.get('mode') != 'sync' or not isinstance(raw.get('steps'), list) or not raw['steps']:
-        raise WorkflowError('Workflow must define non-empty sequential sync steps', 500)
+    if not isinstance(raw.get('steps'), list) or not raw['steps']:
+        raise WorkflowError('Workflow must define non-empty sequential steps', 500)
     seen: set[str] = set()
     steps = []
     for step in raw['steps']:

@@ -15,7 +15,7 @@ class WorkflowEngine:
             for step in plan.steps:
                 result = await step.action.execute(resolve(step.args, context), context)
                 if not isinstance(result, ActionResult):
-                    raise WorkflowError('Action must return ActionResult', 500)
+                    raise WorkflowError('BaseAction.execute() must return ActionResult', 500)
                 context.steps[step.id] = result
             response = resolve(plan.response, context)
             if not isinstance(response, UpstreamResponse):

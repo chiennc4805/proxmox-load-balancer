@@ -1,13 +1,13 @@
 from dataclasses import dataclass
 from typing import Any
 
-from app.framework.contracts.action import Action
+from app.framework.contracts.action import BaseAction
 
 
 @dataclass(frozen=True)
 class PlannedStep:
     id: str
-    action: Action
+    action: BaseAction
     args: Any
 
 

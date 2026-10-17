@@ -450,7 +450,6 @@ Bản tuần tự hiện tại nằm ở [workflow_clone_vm.yaml](src/app/config
 
 ```yaml
 name: vm.clone
-mode: sync
 
 steps:
   - id: prepare
@@ -492,14 +491,15 @@ Action công bố tối thiểu:
 | `execute(args, context)` | Entry point duy nhất Engine gọi |
 
 ```python
-from typing import Protocol
+from abc import ABC, abstractmethod
 from app.framework.contracts.action import ActionResult
 
-class Action(Protocol):
+class BaseAction(ABC):
     name: str
     input_schema: type
     output_schema: type
 
+    @abstractmethod
     async def execute(self, args: object, context) -> ActionResult:
         ...
 ```
